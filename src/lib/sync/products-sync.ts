@@ -119,16 +119,25 @@ export async function syncShopifyProducts(
       // Process and save products to database
       for (const product of products) {
         try {
+          logger.debug({ productId: product.id, title: product.title }, 'Transforming product');
+
           const { productRecords, variantRecords } = transformProductToDbRecords(product, organizationId);
+
+          logger.debug({
+            productId: product.id,
+            productRecordsCount: productRecords.length,
+            variantRecordsCount: variantRecords.length
+          }, 'Saving to database');
 
           // Upsert products (one record per variant)
           for (const productRecord of productRecords) {
-            await db
-              .insert(shopifyProducts)
-              .values(productRecord)
-              .onConflictDoUpdate({
-                target: [shopifyProducts.organizationId, shopifyProducts.shopifyProductId],
-                set: {
+            try {
+              await db
+                .insert(shopifyProducts)
+                .values(productRecord)
+                .onConflictDoUpdate({
+                  target: [shopifyProducts.organizationId, shopifyProducts.shopifyProductId],
+                  set: {
                   title: productRecord.title,
                   bodyHtml: productRecord.bodyHtml,
                   vendor: productRecord.vendor,
@@ -165,11 +174,21 @@ export async function syncShopifyProducts(
                   updatedAt: new Date(),
                 },
               });
+              logger.debug({ shopifyProductId: productRecord.shopifyProductId }, 'Product record upserted');
+            } catch (productError) {
+              logger.error({
+                error: productError,
+                shopifyProductId: productRecord.shopifyProductId,
+                errorMessage: productError instanceof Error ? productError.message : String(productError),
+              }, 'Failed to upsert product record');
+              throw productError;
+            }
           }
 
           // Upsert variants
           for (const variantRecord of variantRecords) {
-            await db
+            try {
+              await db
               .insert(shopifyVariants)
               .values(variantRecord)
               .onConflictDoUpdate({
@@ -179,12 +198,27 @@ export async function syncShopifyProducts(
                   updatedAt: new Date(),
                 },
               });
+              logger.debug({ shopifyVariantId: variantRecord.shopifyVariantId }, 'Variant record upserted');
+            } catch (variantError) {
+              logger.error({
+                error: variantError,
+                shopifyVariantId: variantRecord.shopifyVariantId,
+                errorMessage: variantError instanceof Error ? variantError.message : String(variantError),
+              }, 'Failed to upsert variant record');
+              throw variantError;
+            }
           }
 
           result.successCount++;
+          logger.debug({ productId: product.id }, 'Product saved successfully');
         } catch (error) {
           logger.error(
-            { error, productId: product.id },
+            {
+              error,
+              productId: product.id,
+              errorMessage: error instanceof Error ? error.message : String(error),
+              errorStack: error instanceof Error ? error.stack : undefined,
+            },
             'Failed to save product to database'
           );
           result.errorCount++;
