@@ -1,0 +1,65 @@
+import { Queue, QueueOptions } from 'bullmq';
+import { redisConnection } from './redis';
+
+const defaultQueueOptions: QueueOptions = {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: parseInt(process.env.WORKER_MAX_RETRIES || '3'),
+    backoff: {
+      type: 'exponential',
+      delay: 10000, // Start with 10s delay
+    },
+    removeOnComplete: {
+      count: 100, // Keep last 100 completed jobs
+      age: 24 * 3600, // Keep for 24 hours
+    },
+    removeOnFail: {
+      count: 500, // Keep last 500 failed jobs
+      age: 7 * 24 * 3600, // Keep for 7 days
+    },
+  },
+};
+
+// Queue for Shopify product syncs
+export const shopifyProductsQueue = new Queue('shopify-products', defaultQueueOptions);
+
+// Queue for Shopify order syncs
+export const shopifyOrdersQueue = new Queue('shopify-orders', defaultQueueOptions);
+
+// Queue for Seal subscription syncs
+export const sealSubscriptionsQueue = new Queue('seal-subscriptions', defaultQueueOptions);
+
+// Export all queues for easy access
+export const queues = {
+  'shopify-products': shopifyProductsQueue,
+  'shopify-orders': shopifyOrdersQueue,
+  'seal-subscriptions': sealSubscriptionsQueue,
+};
+
+export type QueueName = keyof typeof queues;
+
+// Job data type definitions
+export interface ShopifyProductsSyncJob {
+  syncJobId: string;
+  organizationId: string;
+  integrationId: string;
+  type: 'full' | 'incremental' | 'single';
+  productId?: string;
+  cursor?: string;
+}
+
+export interface ShopifyOrdersSyncJob {
+  syncJobId: string;
+  organizationId: string;
+  integrationId: string;
+  type: 'full' | 'incremental' | 'single';
+  orderId?: string;
+  cursor?: string;
+}
+
+export interface SealSubscriptionsSyncJob {
+  syncJobId: string;
+  organizationId: string;
+  integrationId: string;
+  type: 'subscriptions' | 'orders' | 'customers';
+}
