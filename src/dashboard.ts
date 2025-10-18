@@ -4,6 +4,7 @@ import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { ExpressAdapter } from '@bull-board/express';
 import { queues } from './config/queues';
 import { logger } from './lib/utils/logger';
+import apiRoutes from './api/routes';
 
 const PORT = parseInt(process.env.BULL_BOARD_PORT || '3001');
 const USERNAME = process.env.BULL_BOARD_USERNAME || 'admin';
@@ -11,7 +12,7 @@ const PASSWORD = process.env.BULL_BOARD_PASSWORD || 'admin';
 
 // Create Express adapter for Bull Board
 const serverAdapter = new ExpressAdapter();
-serverAdapter.setBasePath('/');
+serverAdapter.setBasePath('/admin/queues');
 
 // Create Bull Board with all queues
 createBullBoard({
@@ -25,8 +26,19 @@ createBullBoard({
 
 const app = express();
 
-// Basic authentication middleware
-app.use((_req, res, next) => {
+// Parse JSON body
+app.use(express.json());
+
+// Health check endpoint (no auth)
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok', service: 'bull-board' });
+});
+
+// API routes (no auth required for API)
+app.use('/api', apiRoutes);
+
+// Basic authentication middleware (only for admin routes)
+const basicAuth = (_req: express.Request, res: express.Response, next: express.NextFunction) => {
   const authHeader = _req.headers.authorization;
 
   if (!authHeader) {
@@ -47,14 +59,14 @@ app.use((_req, res, next) => {
     res.status(401).send('Invalid credentials');
     return;
   }
-});
+};
 
-// Mount Bull Board
-app.use('/', serverAdapter.getRouter());
+// Mount Bull Board (auth protected)
+app.use('/admin/queues', basicAuth, serverAdapter.getRouter());
 
-// Health check endpoint
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'bull-board' });
+// Root redirect to Bull Board
+app.get('/', (_req, res) => {
+  res.redirect('/admin/queues');
 });
 
 export function startDashboard() {
