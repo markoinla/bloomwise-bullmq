@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { logger } from './lib/utils/logger';
-import { startHealthCheckServer } from './health';
+import { startDashboard } from './dashboard';
 import { shopifyProductsWorker } from './queues/shopify-products';
 
 async function main() {
@@ -18,8 +18,8 @@ async function main() {
     process.exit(1);
   }
 
-  // Start health check server
-  startHealthCheckServer();
+  // Start Bull Board dashboard (includes health check)
+  startDashboard();
 
   // Workers are already initialized and listening
   logger.info('Workers initialized:');

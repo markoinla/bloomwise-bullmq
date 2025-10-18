@@ -54,24 +54,24 @@ npm run dev
 
 The worker will:
 - Connect to Redis and PostgreSQL
-- Start health check server on port 3001
+- Start Bull Board dashboard on port 3001
 - Listen for jobs on configured queues
 
-### 5. Check Health
+### 5. Access Dashboard
 
-```bash
-curl http://localhost:3001/health
-```
+Open http://localhost:3001 in your browser.
 
-Expected response:
-```json
-{
-  "status": "ok",
-  "redis": "connected",
-  "database": "connected",
-  "timestamp": "2025-10-18T..."
-}
-```
+**Login credentials:**
+- Username: `admin`
+- Password: `admin` (from .env)
+
+The dashboard shows:
+- All queues (shopify-products, shopify-orders, seal-subscriptions)
+- Job counts (waiting, active, completed, failed)
+- Individual job details and logs
+- Ability to retry failed jobs
+
+**Health check:** http://localhost:3001/health
 
 ## Deployment to Dokploy
 
@@ -107,7 +107,9 @@ NODE_ENV=production
 LOG_LEVEL=info
 WORKER_CONCURRENCY=5
 WORKER_MAX_RETRIES=3
-HEALTH_CHECK_PORT=3001
+BULL_BOARD_PORT=3001
+BULL_BOARD_USERNAME=admin
+BULL_BOARD_PASSWORD=<strong-password-here>
 ```
 
 ### Step 4: Deploy
@@ -121,16 +123,16 @@ HEALTH_CHECK_PORT=3001
 
 ### Step 5: Verify Deployment
 
-Check health endpoint:
-```bash
-curl https://your-dokploy-worker-url/health
-```
+**Access the dashboard:**
+- Set custom domain in Dokploy: `jobs.bloomwise.co` → port `3001`
+- Visit: https://jobs.bloomwise.co
+- Login with your `BULL_BOARD_USERNAME` and `BULL_BOARD_PASSWORD`
 
-Check logs in Dokploy dashboard for:
+**Check logs in Dokploy:**
 ```
 [INFO] Starting Bloomwise BullMQ Worker Service...
 [INFO] Redis connected
-[INFO] Health check server listening on port 3001
+[INFO] Bull Board dashboard running on port 3001
 [INFO] Workers initialized
 ```
 
@@ -140,7 +142,8 @@ Check logs in Dokploy dashboard for:
 bloomwise-bullmq/
 ├── src/
 │   ├── index.ts                 # Main entry point
-│   ├── health.ts                # Health check HTTP server
+│   ├── dashboard.ts             # Bull Board web UI
+│   ├── health.ts                # Health check (legacy)
 │   ├── config/
 │   │   ├── redis.ts             # Redis connection
 │   │   ├── database.ts          # Neon database connection
@@ -175,13 +178,21 @@ The current worker has placeholder processing. You need to:
 3. Update API routes to enqueue jobs instead of processing synchronously
 4. Add job status polling endpoint
 
-### Optional: Bull Board Dashboard
+## Bull Board Dashboard
 
-Deploy Bull Board for queue monitoring:
-- View job counts (waiting, active, failed)
-- Inspect failed jobs
-- Manually retry jobs
-- Monitor queue performance
+**Included!** The worker service includes Bull Board dashboard for monitoring:
+
+**Features:**
+- ✅ View all queues and job counts (waiting, active, completed, failed)
+- ✅ Inspect individual jobs (data, logs, stack traces)
+- ✅ Manually retry failed jobs
+- ✅ Pause/resume queues
+- ✅ Real-time job updates
+
+**Access:**
+- URL: https://jobs.bloomwise.co (configured in Dokploy)
+- Authentication: Basic auth (set via environment variables)
+- Credentials: `BULL_BOARD_USERNAME` / `BULL_BOARD_PASSWORD`
 
 ## Commands
 
