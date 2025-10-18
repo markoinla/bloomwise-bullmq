@@ -227,6 +227,12 @@ export async function syncShopifyProducts(
         'Batch processed and saved to database'
       );
 
+      // TODO: Sync to internal products/productVariants tables
+      // This additional step transforms Shopify products into the internal product catalog
+      // See examples/sync/shopify-products-to-internal-batch-new.ts for reference
+      // For now, this is handled by the Next.js app when needed
+      // Future enhancement: Implement syncShopifyProductsToInternal() here
+
       // Log sample product for debugging
       if (products.length > 0) {
         logger.debug(
