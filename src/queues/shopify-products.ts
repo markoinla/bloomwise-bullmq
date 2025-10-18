@@ -6,7 +6,7 @@ import { logger, createJobLogger } from '../lib/utils/logger';
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '5');
 
 async function processShopifyProductsSync(job: Job<ShopifyProductsSyncJob>) {
-  const { syncJobId, organizationId, integrationId, type, productId } = job.data;
+  const { syncJobId, organizationId, integrationId, type } = job.data;
   const jobLogger = createJobLogger(job.id!, organizationId);
 
   jobLogger.info({ syncJobId, integrationId, type }, 'Starting Shopify products sync');
