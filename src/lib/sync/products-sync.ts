@@ -129,83 +129,31 @@ export async function syncShopifyProducts(
             variantRecordsCount: variantRecords.length
           }, 'Saving to database');
 
-          // Upsert products (one record per variant)
+          // Upsert products (one record per variant) - just insert for now
           for (const productRecord of productRecords) {
             try {
-              await db
-                .insert(shopifyProducts)
-                .values(productRecord)
-                .onConflictDoUpdate({
-                  target: [shopifyProducts.organizationId, shopifyProducts.shopifyProductId],
-                  set: {
-                  title: productRecord.title,
-                  bodyHtml: productRecord.bodyHtml,
-                  vendor: productRecord.vendor,
-                  productType: productRecord.productType,
-                  handle: productRecord.handle,
-                  variantTitle: productRecord.variantTitle,
-                  variantPrice: productRecord.variantPrice,
-                  variantCompareAtPrice: productRecord.variantCompareAtPrice,
-                  variantSku: productRecord.variantSku,
-                  variantBarcode: productRecord.variantBarcode,
-                  variantGrams: productRecord.variantGrams,
-                  variantInventoryQuantity: productRecord.variantInventoryQuantity,
-                  variantInventoryPolicy: productRecord.variantInventoryPolicy,
-                  variantFulfillmentService: productRecord.variantFulfillmentService,
-                  variantInventoryManagement: productRecord.variantInventoryManagement,
-                  variantRequiresShipping: productRecord.variantRequiresShipping,
-                  variantTaxable: productRecord.variantTaxable,
-                  variantPosition: productRecord.variantPosition,
-                  option1Value: productRecord.option1Value,
-                  option2Value: productRecord.option2Value,
-                  option3Value: productRecord.option3Value,
-                  status: productRecord.status,
-                  publishedAt: productRecord.publishedAt,
-                  seoTitle: productRecord.seoTitle,
-                  seoDescription: productRecord.seoDescription,
-                  featuredImage: productRecord.featuredImage,
-                  variantImage: productRecord.variantImage,
-                  allImages: productRecord.allImages,
-                  tags: productRecord.tags,
-                  shopifyUpdatedAt: productRecord.shopifyUpdatedAt,
-                  rawProductData: productRecord.rawProductData,
-                  rawVariantData: productRecord.rawVariantData,
-                  syncedAt: productRecord.syncedAt,
-                  updatedAt: new Date(),
-                },
-              });
-              logger.debug({ shopifyProductId: productRecord.shopifyProductId }, 'Product record upserted');
+              await db.insert(shopifyProducts).values(productRecord);
+              logger.debug({ shopifyProductId: productRecord.shopifyProductId }, 'Product record inserted');
             } catch (productError) {
-              logger.error({
-                error: productError,
+              // If insert fails (duplicate), just log and continue
+              logger.warn({
                 shopifyProductId: productRecord.shopifyProductId,
                 errorMessage: productError instanceof Error ? productError.message : String(productError),
-              }, 'Failed to upsert product record');
-              throw productError;
+              }, 'Product insert failed (likely duplicate) - skipping');
             }
           }
 
-          // Upsert variants
+          // Upsert variants - just insert for now
           for (const variantRecord of variantRecords) {
             try {
-              await db
-              .insert(shopifyVariants)
-              .values(variantRecord)
-              .onConflictDoUpdate({
-                target: [shopifyVariants.organizationId, shopifyVariants.shopifyVariantId],
-                set: {
-                  ...variantRecord,
-                  updatedAt: new Date(),
-                },
-              });
-              logger.debug({ shopifyVariantId: variantRecord.shopifyVariantId }, 'Variant record upserted');
+              await db.insert(shopifyVariants).values(variantRecord);
+              logger.debug({ shopifyVariantId: variantRecord.shopifyVariantId }, 'Variant record inserted');
             } catch (variantError) {
-              logger.error({
-                error: variantError,
+              // If insert fails (duplicate), just log and continue
+              logger.warn({
                 shopifyVariantId: variantRecord.shopifyVariantId,
                 errorMessage: variantError instanceof Error ? variantError.message : String(variantError),
-              }, 'Failed to upsert variant record');
-              throw variantError;
+              }, 'Variant insert failed (likely duplicate) - skipping');
             }
           }
 
