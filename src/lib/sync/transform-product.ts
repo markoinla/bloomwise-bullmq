@@ -1,18 +1,20 @@
 /**
  * Transform Shopify GraphQL Product to Database Records
+ * Matches the pattern from examples/sync/products-sync-graphql.ts
  */
 
 import type { ShopifyProductInsert, ShopifyVariantInsert } from '../../db/schema';
 
 interface ShopifyGraphQLProduct {
   id: string;
+  legacyResourceId?: string;
   title: string;
   descriptionHtml?: string;
   handle: string;
   status: string;
   vendor?: string;
   productType?: string;
-  tags?: string[];
+  tags?: string[] | string;
   publishedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -32,38 +34,32 @@ interface ShopifyGraphQLProduct {
     edges: Array<{
       node: {
         id: string;
+        legacyResourceId?: string;
         title: string;
         sku?: string;
         barcode?: string;
-        price: string;
-        compareAtPrice?: string;
-        inventoryQuantity?: number;
+        price: string | { amount: string };
+        compareAtPrice?: string | { amount: string };
+        inventoryQuantity?: number | { available: number };
         inventoryPolicy?: string;
         inventoryManagement?: string;
         fulfillmentService?: string;
         requiresShipping?: boolean;
         taxable?: boolean;
-        weight?: number;
+        weight?: number | { value: number; unit: string };
         weightUnit?: string;
         position?: number;
         image?: {
           url: string;
-          altText?: string;
         };
         selectedOptions?: Array<{
           name: string;
           value: string;
         }>;
+        createdAt?: string;
+        updatedAt?: string;
       };
     }>;
-  };
-  options?: Array<{
-    name: string;
-    values: string[];
-  }>;
-  seo?: {
-    title?: string;
-    description?: string;
   };
 }
 
@@ -78,175 +74,172 @@ function extractShopifyId(gid: string): string {
 
 /**
  * Transform a Shopify GraphQL product into database insert records
+ * Returns ONE product record and multiple variant records
  */
 export function transformProductToDbRecords(
   product: ShopifyGraphQLProduct,
   organizationId: string
 ): {
-  productRecords: ShopifyProductInsert[];
+  productRecord: ShopifyProductInsert;
   variantRecords: ShopifyVariantInsert[];
 } {
-  const productRecords: ShopifyProductInsert[] = [];
+  // Extract product ID (use legacyResourceId if available, otherwise parse from GID)
+  const shopifyProductId = product.legacyResourceId?.toString() || extractShopifyId(product.id);
+
+  // Extract images
+  const images = product.images?.edges?.map(edge => edge.node) || [];
+  const featuredImage = images.length > 0 ? images[0]?.url : null;
+  const allImages = images.map(img => img.url).filter(Boolean);
+
+  // Create ONE product record (product-level data only)
+  const productRecord: ShopifyProductInsert = {
+    organizationId,
+    shopifyProductId,
+    shopifyVariantId: null, // Product record doesn't reference a specific variant
+
+    // Product information
+    title: product.title || "",
+    bodyHtml: product.descriptionHtml || null,
+    vendor: product.vendor || null,
+    productType: product.productType || null,
+    handle: product.handle || "",
+
+    // Variant fields - leave null for product record
+    variantTitle: null,
+    variantPrice: null,
+    variantCompareAtPrice: null,
+    variantSku: null,
+    variantBarcode: null,
+    variantGrams: null,
+    variantInventoryQuantity: null,
+    variantInventoryPolicy: null,
+    variantFulfillmentService: null,
+    variantInventoryManagement: null,
+    variantRequiresShipping: true,
+    variantTaxable: true,
+    variantPosition: null,
+
+    // Options - leave null
+    option1: null,
+    option1Value: null,
+    option2: null,
+    option2Value: null,
+    option3: null,
+    option3Value: null,
+
+    // Status and availability
+    status: product.status || "draft",
+    publishedAt: product.publishedAt ? new Date(product.publishedAt) : null,
+    publishedScope: "web",
+
+    // SEO - not in GraphQL response, leave null
+    seoTitle: null,
+    seoDescription: null,
+
+    // Images
+    featuredImage,
+    variantImage: null,
+    allImages,
+
+    // Tags
+    tags: product.tags ? (Array.isArray(product.tags) ? product.tags.join(", ") : product.tags) : null,
+    collections: null,
+
+    // Shopify timestamps
+    shopifyCreatedAt: new Date(product.createdAt),
+    shopifyUpdatedAt: new Date(product.updatedAt),
+
+    // Raw data
+    rawProductData: product,
+    rawVariantData: null,
+
+    // Sync metadata
+    apiVersion: '2024-10',
+    syncedAt: new Date(),
+
+    // Active by default
+    isActive: true,
+  };
+
+  // Create variant records for ALL variants
   const variantRecords: ShopifyVariantInsert[] = [];
+  const variantsArray = product.variants?.edges?.map(edge => edge.node) || [];
 
-  const shopifyProductId = extractShopifyId(product.id);
-  const now = new Date();
+  variantsArray.forEach((variant) => {
+    const variantId = variant.legacyResourceId?.toString() || extractShopifyId(variant.id);
 
-  // Get all images
-  const allImages = product.images?.edges.map((edge) => ({
-    url: edge.node.url,
-    altText: edge.node.altText || null,
-  })) || [];
+    // Extract price (handle both string and object format)
+    const price = typeof variant.price === 'object' ? variant.price.amount : variant.price;
+    const compareAtPrice = variant.compareAtPrice
+      ? (typeof variant.compareAtPrice === 'object' ? variant.compareAtPrice.amount : variant.compareAtPrice)
+      : null;
 
-  // Get product options
-  const options = product.options || [];
-  const option1 = options[0]?.name || null;
-  const option2 = options[1]?.name || null;
-  const option3 = options[2]?.name || null;
+    // Extract inventory quantity
+    const inventoryQuantity = typeof variant.inventoryQuantity === 'object'
+      ? variant.inventoryQuantity.available
+      : (variant.inventoryQuantity || 0);
 
-  // Process each variant
-  const variants = product.variants?.edges || [];
+    // Extract weight
+    const weight = typeof variant.weight === 'object' ? variant.weight.value : variant.weight;
+    const weightUnit = typeof variant.weight === 'object' ? variant.weight.unit : (variant.weightUnit || 'kg');
 
-  for (const variantEdge of variants) {
-    const variant = variantEdge.node;
-    const shopifyVariantId = extractShopifyId(variant.id);
-
-    // Get variant option values
-    const selectedOptions = variant.selectedOptions || [];
-    const option1Value = selectedOptions.find(opt => opt.name === option1)?.value || null;
-    const option2Value = selectedOptions.find(opt => opt.name === option2)?.value || null;
-    const option3Value = selectedOptions.find(opt => opt.name === option3)?.value || null;
-
-    // Create product record (one per variant in shopify_products table)
-    const productRecord: ShopifyProductInsert = {
-      organizationId,
-      shopifyProductId,
-      shopifyVariantId,
-
-      // Product info
-      title: product.title,
-      bodyHtml: product.descriptionHtml || null,
-      vendor: product.vendor || null,
-      productType: product.productType || null,
-      handle: product.handle,
-
-      // Variant info
-      variantTitle: variant.title,
-      variantPrice: variant.price,
-      variantCompareAtPrice: variant.compareAtPrice || null,
-      variantSku: variant.sku || null,
-      variantBarcode: variant.barcode || null,
-      variantGrams: variant.weight ? Math.round(variant.weight) : null,
-      variantInventoryQuantity: variant.inventoryQuantity || 0,
-      variantInventoryPolicy: variant.inventoryPolicy || null,
-      variantFulfillmentService: variant.fulfillmentService || null,
-      variantInventoryManagement: variant.inventoryManagement || null,
-      variantRequiresShipping: variant.requiresShipping ?? true,
-      variantTaxable: variant.taxable ?? true,
-      variantPosition: variant.position || null,
-
-      // Options
-      option1,
-      option1Value,
-      option2,
-      option2Value,
-      option3,
-      option3Value,
-
-      // Status
-      status: product.status.toLowerCase(),
-      publishedAt: product.publishedAt ? new Date(product.publishedAt) : null,
-      publishedScope: null,
-
-      // SEO
-      seoTitle: product.seo?.title || null,
-      seoDescription: product.seo?.description || null,
-
-      // Images
-      featuredImage: product.featuredImage?.url || null,
-      variantImage: variant.image?.url || null,
-      allImages,
-
-      // Tags
-      tags: product.tags?.join(', ') || null,
-      collections: null,
-
-      // Shopify timestamps
-      shopifyCreatedAt: new Date(product.createdAt),
-      shopifyUpdatedAt: new Date(product.updatedAt),
-
-      // Raw data
-      rawProductData: product,
-      rawVariantData: variant,
-
-      // Sync metadata
-      apiVersion: '2024-10',
-      syncedAt: now,
-
-      // Active by default
-      isActive: true,
-    };
-
-    productRecords.push(productRecord);
-
-    // Create variant record for shopify_variants table
     const variantRecord: ShopifyVariantInsert = {
       organizationId,
       shopifyProductId,
-      shopifyVariantId,
+      shopifyVariantId: variantId,
 
-      // Variant info
-      title: product.title,
-      variantTitle: variant.title,
+      // Variant information
+      title: variant.title || "",
+      variantTitle: variant.title || "",
       sku: variant.sku || null,
       barcode: variant.barcode || null,
-      grams: variant.weight ? Math.round(variant.weight) : null,
-      weight: variant.weight?.toString() || null,
-      weightUnit: variant.weightUnit || null,
+      grams: weight ? Math.round(weight) : 0,
+      weight: weight?.toString() || null,
+      weightUnit,
 
       // Pricing
-      price: variant.price,
-      compareAtPrice: variant.compareAtPrice || null,
+      price: price || "0.00",
+      compareAtPrice,
 
       // Inventory
-      inventoryQuantity: variant.inventoryQuantity || 0,
-      inventoryPolicy: variant.inventoryPolicy || null,
+      inventoryQuantity,
+      inventoryPolicy: variant.inventoryPolicy || "deny",
       inventoryManagement: variant.inventoryManagement || null,
-      fulfillmentService: variant.fulfillmentService || null,
+      fulfillmentService: variant.fulfillmentService || "manual",
       requiresShipping: variant.requiresShipping ?? true,
       taxable: variant.taxable ?? true,
       taxCode: null,
 
       // Options
-      option1Name: option1,
-      option1Value,
-      option2Name: option2,
-      option2Value,
-      option3Name: option3,
-      option3Value,
+      option1Name: null,
+      option1Value: variant.selectedOptions?.[0]?.value || null,
+      option2Name: null,
+      option2Value: variant.selectedOptions?.[1]?.value || null,
+      option3Name: null,
+      option3Value: variant.selectedOptions?.[2]?.value || null,
 
       // Display
-      position: variant.position || null,
+      position: variant.position || 1,
       imageId: null,
       imageSrc: variant.image?.url || null,
 
       // Status
-      isActive: product.status.toLowerCase() === 'active',
+      isActive: product.status?.toLowerCase() === 'active',
       availableForSale: true,
 
       // Shopify timestamps
-      shopifyCreatedAt: new Date(product.createdAt),
-      shopifyUpdatedAt: new Date(product.updatedAt),
+      shopifyCreatedAt: variant.createdAt ? new Date(variant.createdAt) : new Date(product.createdAt),
+      shopifyUpdatedAt: variant.updatedAt ? new Date(variant.updatedAt) : new Date(product.updatedAt),
 
       // Raw data
       rawData: variant,
 
       // Sync metadata
-      syncedAt: now,
+      syncedAt: new Date(),
     };
 
     variantRecords.push(variantRecord);
-  }
+  });
 
-  return { productRecords, variantRecords };
+  return { productRecord, variantRecords };
 }

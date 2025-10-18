@@ -134,7 +134,7 @@ export const shopifyProducts = pgTable("shopify_products", {
 
   // Variant-specific information
   variantTitle: text("variant_title"),
-  variantPrice: text("variant_price"),
+  variantPrice: text("variant_price"), // stored as text to match GraphQL string format, DB accepts it
   variantCompareAtPrice: text("variant_compare_at_price"),
   variantSku: text("variant_sku"),
   variantBarcode: text("variant_barcode"),
