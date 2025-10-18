@@ -2,6 +2,14 @@ import { Worker, Job } from 'bullmq';
 import { redisConnection } from '../config/redis';
 import { ShopifyProductsSyncJob } from '../config/queues';
 import { logger, createJobLogger } from '../lib/utils/logger';
+import {
+  getShopifyIntegration,
+  getSyncJob,
+  markSyncJobRunning,
+  markSyncJobCompleted,
+  markSyncJobFailed,
+  updateSyncJobProgress,
+} from '../db/queries';
 
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '5');
 
@@ -12,31 +20,72 @@ async function processShopifyProductsSync(job: Job<ShopifyProductsSyncJob>) {
   jobLogger.info({ syncJobId, integrationId, type }, 'Starting Shopify products sync');
 
   try {
-    // TODO: Implement actual sync logic
-    // 1. Fetch credentials from database using integrationId
-    // 2. Update syncJobs status to 'in_progress'
-    // 3. Call sync function (import from bloomwise codebase)
-    // 4. Update progress periodically
-    // 5. Update syncJobs status to 'completed' or 'failed'
+    // 1. Verify sync job exists
+    const syncJob = await getSyncJob(syncJobId);
+    if (!syncJob) {
+      throw new Error(`Sync job ${syncJobId} not found in database`);
+    }
 
-    // Placeholder implementation
+    // 2. Fetch Shopify credentials
+    jobLogger.info('Fetching Shopify credentials...');
+    const integration = await getShopifyIntegration(integrationId);
+
+    if (!integration) {
+      throw new Error(`Shopify integration ${integrationId} not found`);
+    }
+
+    if (!integration.isActive) {
+      throw new Error(`Shopify integration ${integrationId} is not active`);
+    }
+
+    // 3. Mark sync job as running
+    await markSyncJobRunning(syncJobId);
     await job.updateProgress(0);
 
-    jobLogger.info('Fetching Shopify credentials...');
-    // const credentials = await fetchShopifyCredentials(integrationId);
+    jobLogger.info(
+      { shopDomain: integration.shopDomain, type },
+      'Starting product sync with Shopify credentials'
+    );
 
-    jobLogger.info('Syncing products...');
-    // const result = await syncProducts(credentials, type, productId);
+    // TODO: Implement actual sync logic
+    // 4. Call sync function (to be imported from bloomwise codebase)
+    // const result = await syncShopifyProducts({
+    //   accessToken: integration.accessToken,
+    //   shopDomain: integration.shopDomain,
+    //   organizationId,
+    //   syncJobId,
+    //   type,
+    //   onProgress: async (progress) => {
+    //     await updateSyncJobProgress(syncJobId, progress);
+    //     await job.updateProgress((progress.processedItems / progress.totalItems) * 100);
+    //   },
+    // });
 
+    // Placeholder: Simulate successful sync
+    const result = {
+      totalItems: 0,
+      processedItems: 0,
+      successCount: 0,
+      errorCount: 0,
+      skipCount: 0,
+    };
+
+    // 5. Mark sync job as completed
+    await markSyncJobCompleted(syncJobId, result);
     await job.updateProgress(100);
 
-    jobLogger.info({ syncJobId }, 'Shopify products sync completed successfully');
+    jobLogger.info({ syncJobId, result }, 'Shopify products sync completed successfully');
 
     return {
       success: true,
-      itemsProcessed: 0, // Update with actual count
+      ...result,
     };
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+    // Mark sync job as failed in database
+    await markSyncJobFailed(syncJobId, errorMessage, error);
+
     jobLogger.error({ error, syncJobId }, 'Shopify products sync failed');
     throw error; // Let BullMQ handle retries
   }
