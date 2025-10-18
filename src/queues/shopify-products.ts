@@ -47,28 +47,17 @@ async function processShopifyProductsSync(job: Job<ShopifyProductsSyncJob>) {
       'Starting product sync with Shopify credentials'
     );
 
-    // TODO: Implement actual sync logic
-    // 4. Call sync function (to be imported from bloomwise codebase)
-    // const result = await syncShopifyProducts({
-    //   accessToken: integration.accessToken,
-    //   shopDomain: integration.shopDomain,
-    //   organizationId,
-    //   syncJobId,
-    //   type,
-    //   onProgress: async (progress) => {
-    //     await updateSyncJobProgress(syncJobId, progress);
-    //     await job.updateProgress((progress.processedItems / progress.totalItems) * 100);
-    //   },
-    // });
+    // 4. Execute the sync
+    const { syncShopifyProducts } = await import('../lib/sync/products-sync');
 
-    // Placeholder: Simulate successful sync
-    const result = {
-      totalItems: 0,
-      processedItems: 0,
-      successCount: 0,
-      errorCount: 0,
-      skipCount: 0,
-    };
+    const result = await syncShopifyProducts({
+      organizationId,
+      syncJobId,
+      shopDomain: integration.shopDomain,
+      accessToken: integration.accessToken,
+      fetchAll: type === 'full',
+      updatedAfter: syncJob.config?.updatedAfter as string | undefined,
+    });
 
     // 5. Mark sync job as completed
     await markSyncJobCompleted(syncJobId, result);
