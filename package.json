@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:connection": "tsx src/scripts/test-connection.ts",
+    "test:enqueue": "tsx src/scripts/enqueue-test-job.ts",
     "type-check": "tsc --noEmit"
   },
   "keywords": [
@@ -24,6 +25,7 @@
     "ioredis": "^5.4.1",
     "drizzle-orm": "^0.36.4",
     "@neondatabase/serverless": "^0.10.3",
+    "@paralleldrive/cuid2": "^2.2.2",
     "dotenv": "^16.4.7",
     "pino": "^9.5.0",
     "pino-pretty": "^13.0.0",
