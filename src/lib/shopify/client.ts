@@ -62,7 +62,7 @@ export async function executeGraphQLQuery<T>(
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
-    const result = await response.json();
+    const result = (await response.json()) as GraphQLResponse<T>;
 
     // Log query cost if available
     if (result.extensions?.cost) {
@@ -81,7 +81,7 @@ export async function executeGraphQLQuery<T>(
       throw new Error(`GraphQL errors: ${errorMessages}`);
     }
 
-    return result as GraphQLResponse<T>;
+    return result;
   } catch (error: any) {
     const errorMessage = error instanceof Error ? error.message : String(error);
 

@@ -100,7 +100,7 @@ router.post('/sync/products', async (req: Request, res: Response) => {
       'API: Products sync job enqueued'
     );
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       jobId: job.id,
       syncJobId,
@@ -113,7 +113,7 @@ router.post('/sync/products', async (req: Request, res: Response) => {
     });
   } catch (error) {
     logger.error({ error }, 'API: Failed to enqueue products sync');
-    res.status(500).json({
+    return res.status(500).json({
       error: 'Failed to enqueue sync job',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
@@ -197,7 +197,7 @@ router.post('/sync/orders', async (req: Request, res: Response) => {
       'API: Orders sync job enqueued'
     );
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       jobId: job.id,
       syncJobId,
@@ -209,7 +209,7 @@ router.post('/sync/orders', async (req: Request, res: Response) => {
     });
   } catch (error) {
     logger.error({ error }, 'API: Failed to enqueue orders sync');
-    res.status(500).json({
+    return res.status(500).json({
       error: 'Failed to enqueue sync job',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
@@ -236,7 +236,7 @@ router.get('/sync/status/:syncJobId', async (req: Request, res: Response) => {
       });
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       syncJobId: job.id,
       organizationId: job.organizationId,
       type: job.type,
@@ -251,7 +251,7 @@ router.get('/sync/status/:syncJobId', async (req: Request, res: Response) => {
     });
   } catch (error) {
     logger.error({ error }, 'API: Failed to get sync status');
-    res.status(500).json({
+    return res.status(500).json({
       error: 'Failed to get sync status',
       message: error instanceof Error ? error.message : 'Unknown error',
     });

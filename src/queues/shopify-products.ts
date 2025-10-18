@@ -8,7 +8,6 @@ import {
   markSyncJobRunning,
   markSyncJobCompleted,
   markSyncJobFailed,
-  updateSyncJobProgress,
 } from '../db/queries';
 
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '5');
@@ -48,7 +47,7 @@ async function processShopifyProductsSync(job: Job<ShopifyProductsSyncJob>) {
     );
 
     // 4. Execute the sync
-    const { syncShopifyProducts } = await import('../lib/sync/products-sync');
+    const { syncShopifyProducts } = await import('../lib/sync/products-sync.js');
 
     const result = await syncShopifyProducts({
       organizationId,
@@ -56,7 +55,7 @@ async function processShopifyProductsSync(job: Job<ShopifyProductsSyncJob>) {
       shopDomain: integration.shopDomain,
       accessToken: integration.accessToken,
       fetchAll: type === 'full',
-      updatedAfter: syncJob.config?.updatedAfter as string | undefined,
+      updatedAfter: syncJob.config?.dateFrom,
     });
 
     // 5. Mark sync job as completed
@@ -65,10 +64,7 @@ async function processShopifyProductsSync(job: Job<ShopifyProductsSyncJob>) {
 
     jobLogger.info({ syncJobId, result }, 'Shopify products sync completed successfully');
 
-    return {
-      success: true,
-      ...result,
-    };
+    return result;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 

@@ -83,7 +83,7 @@ export async function syncShopifyProducts(
       );
 
       // Fetch products from Shopify GraphQL API
-      const response = await executeGraphQLQuery<{
+      type ProductsResponse = {
         products: {
           edges: Array<{
             cursor: string;
@@ -94,7 +94,9 @@ export async function syncShopifyProducts(
             endCursor: string | null;
           };
         };
-      }>(
+      };
+
+      const response = await executeGraphQLQuery<ProductsResponse>(
         { shopDomain, accessToken },
         PRODUCTS_QUERY,
         {
@@ -110,8 +112,8 @@ export async function syncShopifyProducts(
         throw new Error('Invalid response from Shopify GraphQL API');
       }
 
-      const products = response.data.products.edges.map((edge) => edge.node);
-      const pageInfo = response.data.products.pageInfo;
+      const products = response.data.products.edges.map((edge: { cursor: string; node: any }) => edge.node);
+      const pageInfo: { hasNextPage: boolean; endCursor: string | null } = response.data.products.pageInfo;
 
       // Update progress
       result.processedItems += products.length;
