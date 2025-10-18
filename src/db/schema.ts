@@ -113,7 +113,166 @@ export const shopifyIntegrations = pgTable("shopify_integrations", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// ============================================
+// Shopify Products Tables
+// ============================================
+
+export const shopifyProducts = pgTable("shopify_products", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull(),
+
+  // Shopify identifiers
+  shopifyProductId: text("shopify_product_id").notNull(),
+  shopifyVariantId: text("shopify_variant_id"),
+
+  // Product information
+  title: text("title").notNull(),
+  bodyHtml: text("body_html"),
+  vendor: text("vendor"),
+  productType: text("product_type"),
+  handle: text("handle").notNull(),
+
+  // Variant-specific information
+  variantTitle: text("variant_title"),
+  variantPrice: text("variant_price"),
+  variantCompareAtPrice: text("variant_compare_at_price"),
+  variantSku: text("variant_sku"),
+  variantBarcode: text("variant_barcode"),
+  variantGrams: integer("variant_grams"),
+  variantInventoryQuantity: integer("variant_inventory_quantity"),
+  variantInventoryPolicy: text("variant_inventory_policy"),
+  variantFulfillmentService: text("variant_fulfillment_service"),
+  variantInventoryManagement: text("variant_inventory_management"),
+  variantRequiresShipping: boolean("variant_requires_shipping").default(true),
+  variantTaxable: boolean("variant_taxable").default(true),
+  variantPosition: integer("variant_position"),
+
+  // Variant options
+  option1: text("option1"),
+  option1Value: text("option1_value"),
+  option2: text("option2"),
+  option2Value: text("option2_value"),
+  option3: text("option3"),
+  option3Value: text("option3_value"),
+
+  // Status and availability
+  status: text("status").notNull(),
+  publishedAt: timestamp("published_at"),
+  publishedScope: text("published_scope"),
+
+  // SEO
+  seoTitle: text("seo_title"),
+  seoDescription: text("seo_description"),
+
+  // Images
+  featuredImage: text("featured_image"),
+  variantImage: text("variant_image"),
+  allImages: jsonb("all_images"),
+
+  // Tags and collections
+  tags: text("tags"),
+  collections: jsonb("collections"),
+
+  // Timestamps from Shopify
+  shopifyCreatedAt: timestamp("shopify_created_at").notNull(),
+  shopifyUpdatedAt: timestamp("shopify_updated_at").notNull(),
+
+  // Complete raw JSON from Shopify
+  rawProductData: jsonb("raw_product_data").notNull(),
+  rawVariantData: jsonb("raw_variant_data"),
+
+  // Sync metadata
+  apiVersion: text("api_version").notNull().default("2024-10"),
+  syncedAt: timestamp("synced_at").notNull().defaultNow(),
+  lastWebhookAt: timestamp("last_webhook_at"),
+
+  // Internal mapping
+  internalRecipeId: uuid("internal_recipe_id"),
+  internalInventoryItemId: uuid("internal_inventory_item_id"),
+  mappingType: text("mapping_type"),
+  mappingNotes: text("mapping_notes"),
+
+  // Metadata
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const shopifyVariants = pgTable("shopify_variants", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull(),
+
+  // Shopify identifiers
+  shopifyProductId: text("shopify_product_id").notNull(),
+  shopifyVariantId: text("shopify_variant_id").notNull(),
+
+  // Variant information
+  title: text("title"),
+  variantTitle: text("variant_title"),
+  sku: text("sku"),
+  barcode: text("barcode"),
+  grams: integer("grams"),
+  weight: text("weight"),
+  weightUnit: text("weight_unit"),
+
+  // Pricing
+  price: text("price"),
+  compareAtPrice: text("compare_at_price"),
+
+  // Inventory
+  inventoryQuantity: integer("inventory_quantity"),
+  inventoryPolicy: text("inventory_policy"),
+  inventoryManagement: text("inventory_management"),
+  fulfillmentService: text("fulfillment_service"),
+  requiresShipping: boolean("requires_shipping").default(true),
+  taxable: boolean("taxable").default(true),
+  taxCode: text("tax_code"),
+
+  // Options (up to 3 in Shopify)
+  option1Name: text("option1_name"),
+  option1Value: text("option1_value"),
+  option2Name: text("option2_name"),
+  option2Value: text("option2_value"),
+  option3Name: text("option3_name"),
+  option3Value: text("option3_value"),
+
+  // Display
+  position: integer("position"),
+  imageId: text("image_id"),
+  imageSrc: text("image_src"),
+
+  // Internal mapping
+  internalRecipeVariantId: uuid("internal_recipe_variant_id"),
+  internalRecipeId: uuid("internal_recipe_id"),
+  internalInventoryItemId: uuid("internal_inventory_item_id"),
+  mappingType: text("mapping_type"),
+  mappingNotes: text("mapping_notes"),
+
+  // Status
+  isActive: boolean("is_active").notNull().default(true),
+  availableForSale: boolean("available_for_sale").default(true),
+
+  // Timestamps from Shopify
+  shopifyCreatedAt: timestamp("shopify_created_at"),
+  shopifyUpdatedAt: timestamp("shopify_updated_at"),
+
+  // Raw data from Shopify
+  rawData: jsonb("raw_data"),
+
+  // Sync metadata
+  syncedAt: timestamp("synced_at").notNull().defaultNow(),
+  lastWebhookAt: timestamp("last_webhook_at"),
+
+  // System timestamps
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
 // Type exports for use in job processors
 export type SyncJob = typeof syncJobs.$inferSelect;
 export type SyncJobInsert = typeof syncJobs.$inferInsert;
 export type ShopifyIntegration = typeof shopifyIntegrations.$inferSelect;
+export type ShopifyProduct = typeof shopifyProducts.$inferSelect;
+export type ShopifyProductInsert = typeof shopifyProducts.$inferInsert;
+export type ShopifyVariant = typeof shopifyVariants.$inferSelect;
+export type ShopifyVariantInsert = typeof shopifyVariants.$inferInsert;
