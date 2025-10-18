@@ -11,6 +11,8 @@
 
 import { logger } from '../utils/logger';
 import { updateSyncJobProgress } from '../../db/queries';
+import { executeGraphQLQuery } from '../shopify/client';
+import { PRODUCTS_QUERY } from '../shopify/graphql-queries';
 
 interface ProductsSyncParams {
   organizationId: string;
@@ -80,24 +82,40 @@ export async function syncShopifyProducts(
         'Fetching products batch from Shopify'
       );
 
-      // TODO: Call fetchProductsGraphQL from graphql-client
-      // const batchResult = await fetchProductsGraphQL({
-      //   shopDomain,
-      //   accessToken,
-      //   limit: 250,
-      //   cursor,
-      //   query: graphqlQuery,
-      // });
+      // Fetch products from Shopify GraphQL API
+      const response = await executeGraphQLQuery<{
+        products: {
+          edges: Array<{
+            cursor: string;
+            node: any;
+          }>;
+          pageInfo: {
+            hasNextPage: boolean;
+            endCursor: string | null;
+          };
+        };
+      }>(
+        { shopDomain, accessToken },
+        PRODUCTS_QUERY,
+        {
+          first: 250,
+          after: cursor,
+          query: graphqlQuery || undefined,
+          sortKey: 'UPDATED_AT',
+          reverse: true,
+        }
+      );
 
-      // Placeholder: simulate batch processing
-      const batchResult = {
-        products: [],
-        pageInfo: { hasNextPage: false, endCursor: null },
-      };
+      if (!response.data?.products) {
+        throw new Error('Invalid response from Shopify GraphQL API');
+      }
+
+      const products = response.data.products.edges.map((edge) => edge.node);
+      const pageInfo = response.data.products.pageInfo;
 
       // Update progress
-      result.processedItems += batchResult.products.length;
-      result.successCount += batchResult.products.length;
+      result.processedItems += products.length;
+      result.successCount += products.length;
 
       await updateSyncJobProgress(syncJobId, {
         processedItems: result.processedItems,
@@ -108,16 +126,30 @@ export async function syncShopifyProducts(
       logger.info(
         {
           batch: batchNumber,
-          productsInBatch: batchResult.products.length,
+          productsInBatch: products.length,
           totalProcessed: result.processedItems,
-          syncJobId
+          syncJobId,
         },
         'Batch processed'
       );
 
+      // Log sample product for debugging
+      if (products.length > 0) {
+        logger.debug(
+          {
+            sampleProduct: {
+              id: products[0].id,
+              title: products[0].title,
+              variantCount: products[0].variants?.edges?.length || 0,
+            },
+          },
+          'Sample product from batch'
+        );
+      }
+
       // Update pagination
-      hasNextPage = batchResult.pageInfo.hasNextPage;
-      cursor = batchResult.pageInfo.endCursor;
+      hasNextPage = pageInfo.hasNextPage;
+      cursor = pageInfo.endCursor;
 
       // Rate limiting delay (250ms between batches)
       if (hasNextPage) {
