@@ -53,7 +53,7 @@ app.use((_req, res, next) => {
 app.use('/', serverAdapter.getRouter());
 
 // Health check endpoint
-app.get('/health', (req, res) => {
+app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'bull-board' });
 });
 
