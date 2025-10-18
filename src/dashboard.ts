@@ -16,9 +16,9 @@ serverAdapter.setBasePath('/');
 // Create Bull Board with all queues
 createBullBoard({
   queues: [
-    new BullMQAdapter(queues['shopify-products']),
-    new BullMQAdapter(queues['shopify-orders']),
-    new BullMQAdapter(queues['seal-subscriptions']),
+    new BullMQAdapter(queues['shopify-products']) as any,
+    new BullMQAdapter(queues['shopify-orders']) as any,
+    new BullMQAdapter(queues['seal-subscriptions']) as any,
   ],
   serverAdapter,
 });
@@ -26,12 +26,13 @@ createBullBoard({
 const app = express();
 
 // Basic authentication middleware
-app.use((req, res, next) => {
-  const authHeader = req.headers.authorization;
+app.use((_req, res, next) => {
+  const authHeader = _req.headers.authorization;
 
   if (!authHeader) {
     res.setHeader('WWW-Authenticate', 'Basic realm="Bull Board"');
-    return res.status(401).send('Authentication required');
+    res.status(401).send('Authentication required');
+    return;
   }
 
   const auth = Buffer.from(authHeader.split(' ')[1], 'base64').toString().split(':');
@@ -40,9 +41,11 @@ app.use((req, res, next) => {
 
   if (user === USERNAME && pass === PASSWORD) {
     next();
+    return;
   } else {
     res.setHeader('WWW-Authenticate', 'Basic realm="Bull Board"');
-    return res.status(401).send('Invalid credentials');
+    res.status(401).send('Invalid credentials');
+    return;
   }
 });
 
