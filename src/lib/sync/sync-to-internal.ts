@@ -278,8 +278,8 @@ export async function syncShopifyProductsToInternal(
           // by first deleting old variants with same (product_id, name) before inserting
           const variantsJson = JSON.stringify(deduplicatedVariants).replace(/'/g, "''");
 
+          // Step 1: Delete any existing variants that would conflict on (product_id, name)
           await db.execute(sql.raw(`
-            -- First, delete any existing variants that would conflict on (product_id, name)
             DELETE FROM product_variants
             WHERE (product_id, name) IN (
               SELECT
@@ -291,9 +291,11 @@ export async function syncShopifyProductsToInternal(
             AND shopify_variant_id NOT IN (
               SELECT v->>'shopifyVariantId'
               FROM jsonb_array_elements('${variantsJson}'::jsonb) AS v
-            );
+            )
+          `));
 
-            -- Then insert with conflict resolution on shopify_variant_id
+          // Step 2: Insert with conflict resolution on shopify_variant_id
+          await db.execute(sql.raw(`
             INSERT INTO product_variants (
               organization_id, product_id, shopify_variant_id, name, sku, barcode,
               price, compare_at_price, weight, weight_unit,
