@@ -261,27 +261,31 @@ export async function syncShopifyProductsToInternal(
             isAvailable: v.is_available,
           }));
 
-          await db
-            .insert(productVariants)
-            .values(variantsForDrizzle)
-            .onConflictDoUpdate({
-              target: [productVariants.organizationId, productVariants.shopifyVariantId],
-              set: {
-                name: variantsForDrizzle[0].name,
-                sku: variantsForDrizzle[0].sku,
-                barcode: variantsForDrizzle[0].barcode,
-                price: variantsForDrizzle[0].price,
-                compareAtPrice: variantsForDrizzle[0].compareAtPrice,
-                weight: variantsForDrizzle[0].weight,
-                option1Value: variantsForDrizzle[0].option1Value,
-                option2Value: variantsForDrizzle[0].option2Value,
-                option3Value: variantsForDrizzle[0].option3Value,
-                imageUrl: variantsForDrizzle[0].imageUrl,
-                inventoryQuantity: variantsForDrizzle[0].inventoryQuantity,
-                isAvailable: variantsForDrizzle[0].isAvailable,
-                updatedAt: new Date(),
-              },
-            });
+          // Insert variants one by one to handle multiple unique constraints
+          for (const variant of variantsForDrizzle) {
+            await db
+              .insert(productVariants)
+              .values(variant)
+              .onConflictDoUpdate({
+                target: [productVariants.organizationId, productVariants.shopifyVariantId],
+                set: {
+                  productId: variant.productId,
+                  name: variant.name,
+                  sku: variant.sku,
+                  barcode: variant.barcode,
+                  price: variant.price,
+                  compareAtPrice: variant.compareAtPrice,
+                  weight: variant.weight,
+                  option1Value: variant.option1Value,
+                  option2Value: variant.option2Value,
+                  option3Value: variant.option3Value,
+                  imageUrl: variant.imageUrl,
+                  inventoryQuantity: variant.inventoryQuantity,
+                  isAvailable: variant.isAvailable,
+                  updatedAt: new Date(),
+                },
+              });
+          }
 
           result.variantsCreated += variantsToUpsert.length;
           logger.info({ batch: batchNumber, count: variantsToUpsert.length }, 'Batch upserted variants to internal');
