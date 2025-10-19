@@ -168,17 +168,21 @@ export async function syncShopifyOrders(
       result.totalItems += orders.length;
 
       // Check if we should continue
-      hasMore = pageInfo.hasNextPage && !fetchAll; // For incremental, process only first batch
+      if (fetchAll) {
+        // For full sync, continue while there are more pages
+        hasMore = pageInfo.hasNextPage;
+      } else {
+        // For incremental, only process first page
+        hasMore = false;
+      }
+
       currentCursor = pageInfo.endCursor;
       result.hasNextPage = pageInfo.hasNextPage;
       result.endCursor = currentCursor;
 
-      // For full sync, continue to next page
-      if (fetchAll && pageInfo.hasNextPage) {
-        // Add delay to respect rate limits
+      // Add delay between pages to respect rate limits
+      if (hasMore) {
         await new Promise(resolve => setTimeout(resolve, 500));
-      } else {
-        break;
       }
     }
 
