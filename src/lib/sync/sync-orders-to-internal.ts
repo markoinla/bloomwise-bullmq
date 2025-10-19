@@ -50,58 +50,113 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
       return result;
     }
 
-    // Process each Shopify order
+    // Get all existing orders with shopify_order_id for this org (for matching)
+    const shopifyOrderIds = shopifyOrdersToSync.map(o => o.shopifyOrderId);
+    const existingOrders = await db
+      .select()
+      .from(orders)
+      .where(
+        and(
+          eq(orders.organizationId, organizationId),
+          sql`${orders.shopifyOrderId} = ANY(${shopifyOrderIds})`
+        )
+      );
+
+    const existingOrdersMap = new Map(
+      existingOrders.map(o => [o.shopifyOrderId, o])
+    );
+
+    // Separate into new orders and updates
+    const ordersToCreate: any[] = [];
+    const ordersToUpdate: Array<{ shopifyOrder: any; existingOrder: any }> = [];
+    const shopifyOrdersToLink: Array<{ shopifyOrderId: string; internalOrderId: string }> = [];
+
     for (const shopifyOrder of shopifyOrdersToSync) {
-      try {
-        // Check if an order already exists with this shopify_order_id
-        const [existingOrder] = await db
-          .select()
-          .from(orders)
-          .where(
-            and(
-              eq(orders.organizationId, organizationId),
-              eq(orders.shopifyOrderId, shopifyOrder.shopifyOrderId)
-            )
-          )
-          .limit(1);
-
-        let internalOrderId: string;
-
-        if (existingOrder) {
-          // Update existing order
-          internalOrderId = existingOrder.id;
-          await updateInternalOrder(shopifyOrder, existingOrder.id);
-          logger.info(
-            { shopifyOrderId: shopifyOrder.shopifyOrderId, internalOrderId },
-            'Updated existing internal order'
-          );
-        } else {
-          // Create new order
-          internalOrderId = await createInternalOrder(shopifyOrder);
-          logger.info(
-            { shopifyOrderId: shopifyOrder.shopifyOrderId, internalOrderId },
-            'Created new internal order'
-          );
-        }
-
-        // Create/update order items
-        const itemsCreated = await syncOrderItems(shopifyOrder, internalOrderId);
-        result.orderItemsCreated += itemsCreated;
-
-        // Update shopify_orders with internal_order_id
-        await db
-          .update(shopifyOrders)
-          .set({ internalOrderId })
-          .where(eq(shopifyOrders.id, shopifyOrder.id));
-
-        result.ordersProcessed++;
-      } catch (error) {
-        logger.error(
-          { error, shopifyOrderId: shopifyOrder.shopifyOrderId },
-          'Failed to sync individual order'
-        );
-        result.errors++;
+      const existingOrder = existingOrdersMap.get(shopifyOrder.shopifyOrderId);
+      if (existingOrder) {
+        ordersToUpdate.push({ shopifyOrder, existingOrder });
+        shopifyOrdersToLink.push({
+          shopifyOrderId: shopifyOrder.id,
+          internalOrderId: existingOrder.id,
+        });
+      } else {
+        ordersToCreate.push(shopifyOrder);
       }
+    }
+
+    logger.info(
+      { toCreate: ordersToCreate.length, toUpdate: ordersToUpdate.length },
+      'Batch processing orders'
+    );
+
+    // Batch create new orders
+    if (ordersToCreate.length > 0) {
+      const newOrdersData = ordersToCreate.map(shopifyOrder =>
+        transformShopifyOrderToInternal(shopifyOrder)
+      );
+
+      const createdOrders = await db
+        .insert(orders)
+        .values(newOrdersData)
+        .returning({ id: orders.id, shopifyOrderId: orders.shopifyOrderId });
+
+      // Map created order IDs back to shopify orders for linking
+      const createdOrdersMap = new Map(
+        createdOrders.map((o, idx) => [ordersToCreate[idx].id, o.id])
+      );
+
+      for (const shopifyOrder of ordersToCreate) {
+        const internalOrderId = createdOrdersMap.get(shopifyOrder.id);
+        if (internalOrderId) {
+          shopifyOrdersToLink.push({
+            shopifyOrderId: shopifyOrder.id,
+            internalOrderId,
+          });
+        }
+      }
+
+      result.ordersProcessed += createdOrders.length;
+      logger.info({ count: createdOrders.length }, 'Batch created new orders');
+    }
+
+    // Batch update existing orders
+    if (ordersToUpdate.length > 0) {
+      for (const { shopifyOrder, existingOrder } of ordersToUpdate) {
+        await updateInternalOrder(shopifyOrder, existingOrder.id);
+      }
+      result.ordersProcessed += ordersToUpdate.length;
+      logger.info({ count: ordersToUpdate.length }, 'Updated existing orders');
+    }
+
+    // Batch create order items for all orders
+    const allOrderItems: any[] = [];
+    for (const { shopifyOrderId, internalOrderId } of shopifyOrdersToLink) {
+      const shopifyOrder = shopifyOrdersToSync.find(o => o.id === shopifyOrderId);
+      if (shopifyOrder) {
+        const items = transformOrderItems(shopifyOrder, internalOrderId);
+        allOrderItems.push(...items);
+      }
+    }
+
+    if (allOrderItems.length > 0) {
+      // Delete existing items first
+      const orderIds = shopifyOrdersToLink.map(o => o.internalOrderId);
+      await db
+        .delete(orderItems)
+        .where(sql`${orderItems.orderId} = ANY(${orderIds})`);
+
+      // Batch insert all items
+      await db.insert(orderItems).values(allOrderItems);
+      result.orderItemsCreated += allOrderItems.length;
+      logger.info({ count: allOrderItems.length }, 'Batch created order items');
+    }
+
+    // Batch update shopify_orders with internal_order_id
+    for (const { shopifyOrderId, internalOrderId } of shopifyOrdersToLink) {
+      await db
+        .update(shopifyOrders)
+        .set({ internalOrderId })
+        .where(eq(shopifyOrders.id, shopifyOrderId));
     }
 
     logger.info(
@@ -121,7 +176,7 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
   }
 }
 
-async function createInternalOrder(shopifyOrder: any): Promise<string> {
+function transformShopifyOrderToInternal(shopifyOrder: any) {
   const rawData = shopifyOrder.rawData as any;
 
   // Determine fulfillment type
@@ -157,79 +212,74 @@ async function createInternalOrder(shopifyOrder: any): Promise<string> {
   // Determine due date (default to pickup_date or 7 days from order date)
   const dueDate = shopifyOrder.pickupDate || new Date(new Date(shopifyOrder.shopifyCreatedAt).getTime() + 7 * 24 * 60 * 60 * 1000);
 
-  const [newOrder] = await db
-    .insert(orders)
-    .values({
-      organizationId: shopifyOrder.organizationId,
-      orderNumber: shopifyOrder.shopifyOrderNumber,
-      customerId: null, // Could be linked later if customer sync is implemented
-      customerName: shopifyOrder.customerName || 'Guest',
-      customerEmail: shopifyOrder.customerEmail,
-      customerPhone: shopifyOrder.customerPhone,
-      status,
-      priority: 'normal',
-      orderDate: shopifyOrder.shopifyCreatedAt,
-      dueDate: dueDate,
-      dueTime: shopifyOrder.pickupTime,
-      completedAt: shopifyOrder.fulfillmentStatus === 'fulfilled' ? shopifyOrder.shopifyUpdatedAt : null,
-      fulfillmentType,
-      deliveryAddress: shopifyOrder.pickupLocation || shippingAddress.address1,
-      deliveryInstructions: shopifyOrder.note,
-      deliveryFee: null,
-      shippingName: shippingAddress.name,
-      shippingPhone: shippingAddress.phone,
-      shippingEmail: null,
-      shippingAddress1: shippingAddress.address1,
-      shippingAddress2: shippingAddress.address2,
-      shippingCity: shippingAddress.city,
-      shippingState: shippingAddress.provinceCode || shippingAddress.province,
-      shippingZip: shippingAddress.zip,
-      shippingCountry: shippingAddress.countryCode || shippingAddress.country,
-      shippingCompany: shippingAddress.company,
-      billingName: billingAddress.name,
-      billingPhone: billingAddress.phone,
-      billingEmail: null,
-      billingAddress1: billingAddress.address1,
-      billingAddress2: billingAddress.address2,
-      billingCity: billingAddress.city,
-      billingState: billingAddress.provinceCode || billingAddress.province,
-      billingZip: billingAddress.zip,
-      billingCountry: billingAddress.countryCode || billingAddress.country,
-      billingCompany: billingAddress.company,
-      subtotal: shopifyOrder.subtotalPrice || '0',
-      taxAmount: shopifyOrder.totalTax || '0',
-      discountAmount: shopifyOrder.totalDiscounts || '0',
-      total: shopifyOrder.totalPrice,
-      totalCost: null,
-      profitAmount: null,
-      profitMargin: null,
-      paymentStatus,
-      paymentMethod: null,
-      paidAmount: paymentStatus === 'paid' ? shopifyOrder.totalPrice : null,
-      externalOrderId: shopifyOrder.shopifyOrderId,
-      orderSource: 'shopify',
-      shopifyOrderId: shopifyOrder.shopifyOrderId,
-      shopifyOrderNumber: shopifyOrder.shopifyOrderNumber,
-      shopifyFulfillmentId: null,
-      shopifyFinancialStatus: shopifyOrder.financialStatus,
-      shopifyFulfillmentStatus: shopifyOrder.fulfillmentStatus,
-      shopifyTags: shopifyOrder.tags,
-      shopifyCurrency: shopifyOrder.currency,
-      shopifySyncedAt: shopifyOrder.syncedAt,
-      internalNotes: null,
-      customerNotes: shopifyOrder.note,
-      specialInstructions: shopifyOrder.note,
-      source: 'shopify',
-      tags: shopifyOrder.tags ? [shopifyOrder.tags] : [],
-      createdBy: 'system',
-      assignedTo: null,
-      cancelledAt: shopifyOrder.shopifyCancelledAt,
-      cancelledBy: shopifyOrder.shopifyCancelledAt ? 'shopify' : null,
-      cancellationReason: shopifyOrder.cancelReason,
-    })
-    .returning({ id: orders.id });
-
-  return newOrder.id;
+  return {
+    organizationId: shopifyOrder.organizationId,
+    orderNumber: shopifyOrder.shopifyOrderNumber,
+    customerId: null,
+    customerName: shopifyOrder.customerName || 'Guest',
+    customerEmail: shopifyOrder.customerEmail,
+    customerPhone: shopifyOrder.customerPhone,
+    status,
+    priority: 'normal',
+    orderDate: shopifyOrder.shopifyCreatedAt,
+    dueDate: dueDate,
+    dueTime: shopifyOrder.pickupTime,
+    completedAt: shopifyOrder.fulfillmentStatus === 'fulfilled' ? shopifyOrder.shopifyUpdatedAt : null,
+    fulfillmentType,
+    deliveryAddress: shopifyOrder.pickupLocation || shippingAddress.address1,
+    deliveryInstructions: shopifyOrder.note,
+    deliveryFee: null,
+    shippingName: shippingAddress.name,
+    shippingPhone: shippingAddress.phone,
+    shippingEmail: null,
+    shippingAddress1: shippingAddress.address1,
+    shippingAddress2: shippingAddress.address2,
+    shippingCity: shippingAddress.city,
+    shippingState: shippingAddress.provinceCode || shippingAddress.province,
+    shippingZip: shippingAddress.zip,
+    shippingCountry: shippingAddress.countryCode || shippingAddress.country,
+    shippingCompany: shippingAddress.company,
+    billingName: billingAddress.name,
+    billingPhone: billingAddress.phone,
+    billingEmail: null,
+    billingAddress1: billingAddress.address1,
+    billingAddress2: billingAddress.address2,
+    billingCity: billingAddress.city,
+    billingState: billingAddress.provinceCode || billingAddress.province,
+    billingZip: billingAddress.zip,
+    billingCountry: billingAddress.countryCode || billingAddress.country,
+    billingCompany: billingAddress.company,
+    subtotal: shopifyOrder.subtotalPrice || '0',
+    taxAmount: shopifyOrder.totalTax || '0',
+    discountAmount: shopifyOrder.totalDiscounts || '0',
+    total: shopifyOrder.totalPrice,
+    totalCost: null,
+    profitAmount: null,
+    profitMargin: null,
+    paymentStatus,
+    paymentMethod: null,
+    paidAmount: paymentStatus === 'paid' ? shopifyOrder.totalPrice : null,
+    externalOrderId: shopifyOrder.shopifyOrderId,
+    orderSource: 'shopify',
+    shopifyOrderId: shopifyOrder.shopifyOrderId,
+    shopifyOrderNumber: shopifyOrder.shopifyOrderNumber,
+    shopifyFulfillmentId: null,
+    shopifyFinancialStatus: shopifyOrder.financialStatus,
+    shopifyFulfillmentStatus: shopifyOrder.fulfillmentStatus,
+    shopifyTags: shopifyOrder.tags,
+    shopifyCurrency: shopifyOrder.currency,
+    shopifySyncedAt: shopifyOrder.syncedAt,
+    internalNotes: null,
+    customerNotes: shopifyOrder.note,
+    specialInstructions: shopifyOrder.note,
+    source: 'shopify',
+    tags: shopifyOrder.tags ? [shopifyOrder.tags] : [],
+    createdBy: 'system',
+    assignedTo: null,
+    cancelledAt: shopifyOrder.shopifyCancelledAt,
+    cancelledBy: shopifyOrder.shopifyCancelledAt ? 'shopify' : null,
+    cancellationReason: shopifyOrder.cancelReason,
+  };
 }
 
 async function updateInternalOrder(shopifyOrder: any, internalOrderId: string): Promise<void> {
@@ -271,21 +321,16 @@ async function updateInternalOrder(shopifyOrder: any, internalOrderId: string): 
     .where(eq(orders.id, internalOrderId));
 }
 
-async function syncOrderItems(shopifyOrder: any, internalOrderId: string): Promise<number> {
+function transformOrderItems(shopifyOrder: any, internalOrderId: string) {
   const rawData = shopifyOrder.rawData as any;
   const lineItems = rawData.lineItems?.edges || [];
 
   if (lineItems.length === 0) {
-    return 0;
+    return [];
   }
 
-  // Delete existing items for this order (we'll recreate them)
-  await db
-    .delete(orderItems)
-    .where(eq(orderItems.orderId, internalOrderId));
-
-  // Create order items from line items
-  const itemsToInsert = lineItems.map((edge: any, index: number) => {
+  // Transform line items to order items format
+  return lineItems.map((edge: any, index: number) => {
     const item = edge.node;
     const variant = item.variant || {};
     const product = variant.product || {};
@@ -293,7 +338,7 @@ async function syncOrderItems(shopifyOrder: any, internalOrderId: string): Promi
     return {
       organizationId: shopifyOrder.organizationId,
       orderId: internalOrderId,
-      productId: null, // Could be linked if product matching is implemented
+      productId: null,
       productVariantId: null,
       itemType: 'product',
       recipeId: null,
@@ -323,13 +368,4 @@ async function syncOrderItems(shopifyOrder: any, internalOrderId: string): Promi
       displayOrder: index,
     };
   });
-
-  await db.insert(orderItems).values(itemsToInsert);
-
-  logger.info(
-    { internalOrderId, itemCount: itemsToInsert.length },
-    'Created order items'
-  );
-
-  return itemsToInsert.length;
 }
