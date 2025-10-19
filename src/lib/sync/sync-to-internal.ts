@@ -4,8 +4,8 @@
  */
 
 import { db } from '../../config/database';
-import { shopifyProducts, shopifyVariants } from '../../db/schema';
-import { eq, and, inArray, sql } from 'drizzle-orm';
+import { shopifyProducts, shopifyVariants, products, productVariants } from '../../db/schema';
+import { eq, and, inArray } from 'drizzle-orm';
 import { logger } from '../utils/logger';
 
 const BATCH_SIZE = 200;
@@ -118,56 +118,81 @@ export async function syncShopifyProductsToInternal(
         };
       });
 
-      // 4. Batch upsert products using raw SQL
+      // 4. Batch upsert products using Drizzle
       if (productsToUpsert.length > 0) {
-        const productsJson = JSON.stringify(productsToUpsert);
-
         try {
-          await db.execute(sql`
-            INSERT INTO products (
-              organization_id, shopify_product_id, shopify_variant_ids, type, name, description,
-              sku, handle, price, requires_shipping, is_physical_product, is_taxable,
-              primary_image_url, image_urls, category, tags,
-              is_active, is_published, published_at, track_inventory, inventory_quantity, allow_backorder
-            )
-            SELECT *
-            FROM json_populate_recordset(NULL::products, ${sql.raw(`'${productsJson.replace(/'/g, "''")}'::jsonb`)})
-            ON CONFLICT (organization_id, shopify_product_id)
-            DO UPDATE SET
-              name = EXCLUDED.name,
-              description = EXCLUDED.description,
-              price = EXCLUDED.price,
-              primary_image_url = EXCLUDED.primary_image_url,
-              image_urls = EXCLUDED.image_urls,
-              tags = EXCLUDED.tags,
-              is_active = EXCLUDED.is_active,
-              is_published = EXCLUDED.is_published,
-              published_at = EXCLUDED.published_at,
-              updated_at = NOW()
-          `);
+          // Map to Drizzle insert format (camelCase)
+          const productsForDrizzle = productsToUpsert.map(p => ({
+            organizationId: p.organization_id,
+            shopifyProductId: p.shopify_product_id,
+            shopifyVariantIds: p.shopify_variant_ids,
+            type: p.type,
+            name: p.name,
+            description: p.description,
+            sku: p.sku,
+            handle: p.handle,
+            price: p.price.toString(),
+            requiresShipping: p.requires_shipping,
+            isPhysicalProduct: p.is_physical_product,
+            isTaxable: p.is_taxable,
+            primaryImageUrl: p.primary_image_url,
+            imageUrls: p.image_urls,
+            category: p.category,
+            tags: p.tags,
+            isActive: p.is_active,
+            isPublished: p.is_published,
+            publishedAt: p.published_at,
+            trackInventory: p.track_inventory,
+            inventoryQuantity: p.inventory_quantity,
+            allowBackorder: p.allow_backorder,
+          }));
+
+          await db
+            .insert(products)
+            .values(productsForDrizzle)
+            .onConflictDoUpdate({
+              target: [products.organizationId, products.shopifyProductId],
+              set: {
+                name: productsForDrizzle[0].name, // Drizzle will use excluded.name
+                description: productsForDrizzle[0].description,
+                price: productsForDrizzle[0].price,
+                primaryImageUrl: productsForDrizzle[0].primaryImageUrl,
+                imageUrls: productsForDrizzle[0].imageUrls,
+                tags: productsForDrizzle[0].tags,
+                isActive: productsForDrizzle[0].isActive,
+                isPublished: productsForDrizzle[0].isPublished,
+                publishedAt: productsForDrizzle[0].publishedAt,
+                updatedAt: new Date(),
+              },
+            });
+
+          result.productsCreated += productsToUpsert.length;
+          logger.info({ batch: batchNumber, count: productsToUpsert.length }, 'Batch upserted products to internal');
         } catch (error) {
           logger.error({
             error,
             sampleProduct: productsToUpsert[0],
-            jsonLength: productsJson.length
-          }, 'Failed to insert products');
+          }, 'Failed to insert products to internal');
           throw error;
         }
-
-        result.productsCreated += productsToUpsert.length;
-        logger.info({ batch: batchNumber, count: productsToUpsert.length }, 'Batch upserted products');
       }
 
       // 5. Fetch internal product IDs we just created/updated
-      const internalProducts = await db.execute<{ id: string; shopify_product_id: string }>(sql`
-        SELECT id, shopify_product_id
-        FROM products
-        WHERE organization_id = ${organizationId}
-          AND shopify_product_id = ANY(ARRAY[${sql.join(batchIds.map(id => sql`${id}`), sql`, `)}])
-      `);
+      const internalProducts = await db
+        .select({
+          id: products.id,
+          shopifyProductId: products.shopifyProductId,
+        })
+        .from(products)
+        .where(
+          and(
+            eq(products.organizationId, organizationId),
+            inArray(products.shopifyProductId, batchIds)
+          )
+        );
 
       const productIdMap = new Map(
-        internalProducts.rows.map(p => [p.shopify_product_id, p.id])
+        internalProducts.map(p => [p.shopifyProductId, p.id])
       );
 
       // 6. Prepare variants for batch upsert
@@ -205,39 +230,68 @@ export async function syncShopifyProductsToInternal(
         })
         .filter(Boolean);
 
-      // 7. Batch upsert variants using raw SQL
+      // 7. Batch upsert variants using Drizzle
       if (variantsToUpsert.length > 0) {
-        const variantsJson = JSON.stringify(variantsToUpsert);
+        try {
+          // Map to Drizzle insert format (camelCase)
+          const variantsForDrizzle = variantsToUpsert.map(v => ({
+            organizationId: v.organization_id,
+            productId: v.product_id,
+            shopifyVariantId: v.shopify_variant_id,
+            name: v.name,
+            sku: v.sku,
+            barcode: v.barcode,
+            price: v.price.toString(),
+            compareAtPrice: v.compare_at_price?.toString(),
+            weight: v.weight?.toString(),
+            weightUnit: v.weight_unit,
+            option1Name: v.option1_name,
+            option1Value: v.option1_value,
+            option2Name: v.option2_name,
+            option2Value: v.option2_value,
+            option3Name: v.option3_name,
+            option3Value: v.option3_value,
+            imageUrl: v.image_url,
+            trackInventory: v.track_inventory,
+            inventoryQuantity: v.inventory_quantity,
+            allowBackorder: v.allow_backorder,
+            sortOrder: v.sort_order,
+            isDefault: v.is_default,
+            isActive: v.is_active,
+            isAvailable: v.is_available,
+          }));
 
-        await db.execute(sql`
-          INSERT INTO product_variants (
-            organization_id, product_id, shopify_variant_id, name, sku, barcode,
-            price, compare_at_price, weight, weight_unit,
-            option1_name, option1_value, option2_name, option2_value, option3_name, option3_value,
-            image_url, track_inventory, inventory_quantity, allow_backorder,
-            sort_order, is_default, is_active, is_available
-          )
-          SELECT *
-          FROM json_populate_recordset(NULL::product_variants, ${sql.raw(`'${variantsJson.replace(/'/g, "''")}'::jsonb`)})
-          ON CONFLICT (organization_id, shopify_variant_id)
-          DO UPDATE SET
-            name = EXCLUDED.name,
-            sku = EXCLUDED.sku,
-            barcode = EXCLUDED.barcode,
-            price = EXCLUDED.price,
-            compare_at_price = EXCLUDED.compare_at_price,
-            weight = EXCLUDED.weight,
-            option1_value = EXCLUDED.option1_value,
-            option2_value = EXCLUDED.option2_value,
-            option3_value = EXCLUDED.option3_value,
-            image_url = EXCLUDED.image_url,
-            inventory_quantity = EXCLUDED.inventory_quantity,
-            is_available = EXCLUDED.is_available,
-            updated_at = NOW()
-        `);
+          await db
+            .insert(productVariants)
+            .values(variantsForDrizzle)
+            .onConflictDoUpdate({
+              target: [productVariants.organizationId, productVariants.shopifyVariantId],
+              set: {
+                name: variantsForDrizzle[0].name,
+                sku: variantsForDrizzle[0].sku,
+                barcode: variantsForDrizzle[0].barcode,
+                price: variantsForDrizzle[0].price,
+                compareAtPrice: variantsForDrizzle[0].compareAtPrice,
+                weight: variantsForDrizzle[0].weight,
+                option1Value: variantsForDrizzle[0].option1Value,
+                option2Value: variantsForDrizzle[0].option2Value,
+                option3Value: variantsForDrizzle[0].option3Value,
+                imageUrl: variantsForDrizzle[0].imageUrl,
+                inventoryQuantity: variantsForDrizzle[0].inventoryQuantity,
+                isAvailable: variantsForDrizzle[0].isAvailable,
+                updatedAt: new Date(),
+              },
+            });
 
-        result.variantsCreated += variantsToUpsert.length;
-        logger.info({ batch: batchNumber, count: variantsToUpsert.length }, 'Batch upserted variants');
+          result.variantsCreated += variantsToUpsert.length;
+          logger.info({ batch: batchNumber, count: variantsToUpsert.length }, 'Batch upserted variants to internal');
+        } catch (error) {
+          logger.error({
+            error,
+            sampleVariant: variantsToUpsert[0],
+          }, 'Failed to insert variants to internal');
+          throw error;
+        }
       }
 
     } catch (error) {

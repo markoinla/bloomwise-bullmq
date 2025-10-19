@@ -9,7 +9,7 @@
  * These schemas must match the bloomwise main database exactly.
  */
 
-import { pgTable, text, timestamp, integer, jsonb, boolean, pgEnum, uuid } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, integer, jsonb, boolean, pgEnum, uuid, numeric } from "drizzle-orm/pg-core";
 
 // ============================================
 // Sync Jobs Tables
@@ -268,6 +268,98 @@ export const shopifyVariants = pgTable("shopify_variants", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+// ============================================
+// Internal Products Tables
+// ============================================
+
+export const products = pgTable("products", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull(),
+
+  // Product type and relationships
+  type: text("type").notNull(), // 'recipe', 'inventory_item', 'bundle'
+  recipeId: uuid("recipe_id"),
+  inventoryItemId: uuid("inventory_item_id"),
+
+  // Basic product info
+  name: text("name").notNull(),
+  description: text("description"),
+  sku: text("sku"),
+  handle: text("handle"),
+  price: numeric("price").notNull(),
+
+  // Shopify integration
+  shopifyProductId: text("shopify_product_id"),
+  shopifyVariantIds: text("shopify_variant_ids").array(),
+
+  // Images and media
+  primaryImageUrl: text("primary_image_url"),
+  imageUrls: text("image_urls").array(),
+
+  // Organization
+  category: text("category"),
+  tags: text("tags").array(),
+
+  // Flags
+  requiresShipping: boolean("requires_shipping").notNull().default(true),
+  isPhysicalProduct: boolean("is_physical_product").notNull().default(true),
+  isTaxable: boolean("is_taxable").notNull().default(true),
+  trackInventory: boolean("track_inventory").notNull().default(false),
+  inventoryQuantity: integer("inventory_quantity").default(0),
+  allowBackorder: boolean("allow_backorder").notNull().default(false),
+  isActive: boolean("is_active").notNull().default(true),
+  isPublished: boolean("is_published").notNull().default(false),
+  publishedAt: timestamp("published_at"),
+
+  // Timestamps
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const productVariants = pgTable("product_variants", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull(),
+  productId: uuid("product_id").notNull(),
+
+  // Variant info
+  name: text("name"),
+  sku: text("sku"),
+  barcode: text("barcode"),
+  price: numeric("price").notNull(),
+  compareAtPrice: numeric("compare_at_price"),
+  weight: numeric("weight"),
+  weightUnit: text("weight_unit"),
+
+  // Shopify integration
+  shopifyVariantId: text("shopify_variant_id"),
+
+  // Options
+  option1Name: text("option1_name"),
+  option1Value: text("option1_value"),
+  option2Name: text("option2_name"),
+  option2Value: text("option2_value"),
+  option3Name: text("option3_name"),
+  option3Value: text("option3_value"),
+
+  // Images
+  imageUrl: text("image_url"),
+
+  // Inventory
+  trackInventory: boolean("track_inventory").notNull().default(false),
+  inventoryQuantity: integer("inventory_quantity").default(0),
+  allowBackorder: boolean("allow_backorder").notNull().default(false),
+
+  // Display
+  sortOrder: integer("sort_order").default(0),
+  isDefault: boolean("is_default").default(false),
+  isActive: boolean("is_active").notNull().default(true),
+  isAvailable: boolean("is_available").default(true),
+
+  // Timestamps
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
 // Type exports for use in job processors
 export type SyncJob = typeof syncJobs.$inferSelect;
 export type SyncJobInsert = typeof syncJobs.$inferInsert;
@@ -276,3 +368,7 @@ export type ShopifyProduct = typeof shopifyProducts.$inferSelect;
 export type ShopifyProductInsert = typeof shopifyProducts.$inferInsert;
 export type ShopifyVariant = typeof shopifyVariants.$inferSelect;
 export type ShopifyVariantInsert = typeof shopifyVariants.$inferInsert;
+export type Product = typeof products.$inferSelect;
+export type ProductInsert = typeof products.$inferInsert;
+export type ProductVariant = typeof productVariants.$inferSelect;
+export type ProductVariantInsert = typeof productVariants.$inferInsert;
