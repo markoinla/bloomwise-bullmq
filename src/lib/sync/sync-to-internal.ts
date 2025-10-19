@@ -4,8 +4,8 @@
  */
 
 import { db } from '../../config/database';
-import { shopifyProducts, shopifyVariants, products, productVariants } from '../../db/schema';
-import { eq, and, inArray } from 'drizzle-orm';
+import { shopifyProducts, shopifyVariants, products } from '../../db/schema';
+import { eq, and, inArray, sql } from 'drizzle-orm';
 import { logger } from '../utils/logger';
 
 const BATCH_SIZE = 200;
@@ -274,29 +274,76 @@ export async function syncShopifyProductsToInternal(
             return true;
           });
 
-          // Batch insert with conflict resolution on shopify_variant_id
-          await db
-            .insert(productVariants)
-            .values(deduplicatedVariants)
-            .onConflictDoUpdate({
-              target: [productVariants.organizationId, productVariants.shopifyVariantId],
-              set: {
-                productId: deduplicatedVariants[0].productId, // Drizzle uses EXCLUDED
-                name: deduplicatedVariants[0].name,
-                sku: deduplicatedVariants[0].sku,
-                barcode: deduplicatedVariants[0].barcode,
-                price: deduplicatedVariants[0].price,
-                compareAtPrice: deduplicatedVariants[0].compareAtPrice,
-                weight: deduplicatedVariants[0].weight,
-                option1Value: deduplicatedVariants[0].option1Value,
-                option2Value: deduplicatedVariants[0].option2Value,
-                option3Value: deduplicatedVariants[0].option3Value,
-                imageUrl: deduplicatedVariants[0].imageUrl,
-                inventoryQuantity: deduplicatedVariants[0].inventoryQuantity,
-                isAvailable: deduplicatedVariants[0].isAvailable,
-                updatedAt: new Date(),
-              },
-            });
+          // Use raw SQL with INSERT ... ON CONFLICT that can handle the (product_id, name) constraint
+          // by first deleting old variants with same (product_id, name) before inserting
+          const variantsJson = JSON.stringify(deduplicatedVariants);
+
+          await db.execute(sql`
+            -- First, delete any existing variants that would conflict on (product_id, name)
+            DELETE FROM product_variants
+            WHERE (product_id, name) IN (
+              SELECT
+                (v->>'productId')::uuid,
+                v->>'name'
+              FROM jsonb_array_elements(${variantsJson}::jsonb) AS v
+            )
+            AND organization_id = ${organizationId}
+            AND shopify_variant_id NOT IN (
+              SELECT v->>'shopifyVariantId'
+              FROM jsonb_array_elements(${variantsJson}::jsonb) AS v
+            );
+
+            -- Then insert with conflict resolution on shopify_variant_id
+            INSERT INTO product_variants (
+              organization_id, product_id, shopify_variant_id, name, sku, barcode,
+              price, compare_at_price, weight, weight_unit,
+              option1_name, option1_value, option2_name, option2_value, option3_name, option3_value,
+              image_url, track_inventory, inventory_quantity, allow_backorder,
+              sort_order, is_default, is_active, is_available
+            )
+            SELECT
+              (v->>'organizationId')::uuid,
+              (v->>'productId')::uuid,
+              v->>'shopifyVariantId',
+              v->>'name',
+              v->>'sku',
+              v->>'barcode',
+              (v->>'price')::numeric,
+              (v->>'compareAtPrice')::numeric,
+              (v->>'weight')::numeric,
+              v->>'weightUnit',
+              v->>'option1Name',
+              v->>'option1Value',
+              v->>'option2Name',
+              v->>'option2Value',
+              v->>'option3Name',
+              v->>'option3Value',
+              v->>'imageUrl',
+              (v->>'trackInventory')::boolean,
+              (v->>'inventoryQuantity')::integer,
+              (v->>'allowBackorder')::boolean,
+              (v->>'sortOrder')::integer,
+              (v->>'isDefault')::boolean,
+              (v->>'isActive')::boolean,
+              (v->>'isAvailable')::boolean
+            FROM jsonb_array_elements(${variantsJson}::jsonb) AS v
+            ON CONFLICT (organization_id, shopify_variant_id)
+            DO UPDATE SET
+              product_id = EXCLUDED.product_id,
+              name = EXCLUDED.name,
+              sku = EXCLUDED.sku,
+              barcode = EXCLUDED.barcode,
+              price = EXCLUDED.price,
+              compare_at_price = EXCLUDED.compare_at_price,
+              weight = EXCLUDED.weight,
+              option1_value = EXCLUDED.option1_value,
+              option2_value = EXCLUDED.option2_value,
+              option3_value = EXCLUDED.option3_value,
+              image_url = EXCLUDED.image_url,
+              inventory_quantity = EXCLUDED.inventory_quantity,
+              is_available = EXCLUDED.is_available,
+              updated_at = NOW()
+          `);
 
           result.variantsCreated += deduplicatedVariants.length;
           logger.info({
