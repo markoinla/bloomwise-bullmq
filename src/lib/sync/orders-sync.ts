@@ -189,9 +189,10 @@ export async function syncShopifyOrders(
       result.hasNextPage = pageInfo.hasNextPage;
       result.endCursor = currentCursor;
 
-      // Add delay between pages to respect rate limits (Shopify allows 2 req/sec)
+      // Add delay between pages to respect rate limits and avoid throttling
+      // Increased to 500ms to be more conservative during large syncs
       if (hasMore) {
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
 

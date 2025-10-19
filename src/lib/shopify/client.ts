@@ -39,8 +39,8 @@ export async function executeGraphQLQuery<T>(
   variables?: Record<string, any>,
   retryCount: number = 0
 ): Promise<GraphQLResponse<T>> {
-  const MAX_RETRIES = 3;
-  const RETRY_DELAY_BASE = 1000;
+  const MAX_RETRIES = 5; // Increased from 3 to handle rate limits better
+  const RETRY_DELAY_BASE = 2000; // Increased from 1000ms
 
   const { shopDomain, accessToken } = config;
   const graphqlEndpoint = `https://${shopDomain}/admin/api/2024-10/graphql.json`;
@@ -99,9 +99,10 @@ export async function executeGraphQLQuery<T>(
     if (isRetryableError && retryCount < MAX_RETRIES) {
       let retryDelay: number;
       if (isRateLimitError) {
-        retryDelay = retryCount === 0 ? 2000 : retryCount === 1 ? 5000 : 10000;
+        // Exponential backoff for rate limits: 3s, 6s, 12s, 24s, 48s
+        retryDelay = 3000 * Math.pow(2, retryCount);
         logger.warn(
-          { retryCount, retryDelay, shopDomain },
+          { retryCount, retryDelay, shopDomain, maxRetries: MAX_RETRIES },
           'Shopify rate limit hit, retrying...'
         );
       } else {
