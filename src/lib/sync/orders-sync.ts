@@ -179,14 +179,18 @@ export async function syncShopifyOrders(
 
       // Sync this batch to internal tables immediately
       logger.info(
-        { batchNumber, syncJobId },
+        { batchNumber, syncJobId, orderCount: orders.length },
         'Syncing batch to internal orders and order_items tables'
       );
 
       try {
+        // Extract shopify_order_ids from this batch to limit internal sync scope
+        const batchShopifyOrderIds = orders.map(order => order.legacyResourceId);
+
         const internalSyncResult = await syncOrdersToInternal({
           organizationId,
           syncJobId,
+          shopifyOrderIds: batchShopifyOrderIds, // Only sync this batch's orders
         });
 
         logger.info(

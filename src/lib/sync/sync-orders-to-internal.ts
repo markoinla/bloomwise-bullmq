@@ -10,6 +10,7 @@ import { logger } from '../utils/logger';
 interface OrderSyncOptions {
   organizationId: string;
   syncJobId?: string;
+  shopifyOrderIds?: string[]; // Limit sync to specific shopify_order IDs (for batch processing)
 }
 
 export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
@@ -18,9 +19,12 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
   orderItemsCreated: number;
   errors: number;
 }> {
-  const { organizationId, syncJobId } = options;
+  const { organizationId, syncJobId, shopifyOrderIds } = options;
 
-  logger.info({ organizationId, syncJobId }, 'Starting internal orders sync');
+  logger.info(
+    { organizationId, syncJobId, limitToIds: shopifyOrderIds?.length },
+    'Starting internal orders sync'
+  );
 
   const result = {
     success: true,
@@ -30,16 +34,22 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
   };
 
   try {
-    // Fetch all Shopify orders for this organization that don't have an internal_order_id yet
+    // Fetch Shopify orders for this organization that don't have an internal_order_id yet
+    // Optionally limit to specific shopify_order IDs (for batch processing)
+    const conditions = [
+      eq(shopifyOrders.organizationId, organizationId),
+      sql`${shopifyOrders.internalOrderId} IS NULL`,
+    ];
+
+    // If specific shopify_order IDs provided, only sync those
+    if (shopifyOrderIds && shopifyOrderIds.length > 0) {
+      conditions.push(sql`${shopifyOrders.shopifyOrderId} = ANY(${shopifyOrderIds})`);
+    }
+
     const shopifyOrdersToSync = await db
       .select()
       .from(shopifyOrders)
-      .where(
-        and(
-          eq(shopifyOrders.organizationId, organizationId),
-          sql`${shopifyOrders.internalOrderId} IS NULL`
-        )
-      );
+      .where(and(...conditions));
 
     logger.info(
       { count: shopifyOrdersToSync.length },
@@ -51,14 +61,14 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
     }
 
     // Get all existing orders with shopify_order_id for this org (for matching)
-    const shopifyOrderIds = shopifyOrdersToSync.map(o => o.shopifyOrderId);
+    const shopifyOrderIdsToCheck = shopifyOrdersToSync.map(o => o.shopifyOrderId);
     const existingOrders = await db
       .select()
       .from(orders)
       .where(
         and(
           eq(orders.organizationId, organizationId),
-          sql`${orders.shopifyOrderId} = ANY(${shopifyOrderIds})`
+          sql`${orders.shopifyOrderId} = ANY(${shopifyOrderIdsToCheck})`
         )
       );
 
