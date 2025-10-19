@@ -130,7 +130,7 @@ export async function syncShopifyProductsToInternal(
             is_active, is_published, published_at, track_inventory, inventory_quantity, allow_backorder
           )
           SELECT *
-          FROM json_populate_recordset(NULL::products, ${productsJson}::jsonb)
+          FROM json_populate_recordset(NULL::products, ${sql.raw(`'${productsJson.replace(/'/g, "''")}'::jsonb`)})
           ON CONFLICT (organization_id, shopify_product_id)
           DO UPDATE SET
             name = EXCLUDED.name,
@@ -209,7 +209,7 @@ export async function syncShopifyProductsToInternal(
             sort_order, is_default, is_active, is_available
           )
           SELECT *
-          FROM json_populate_recordset(NULL::product_variants, ${variantsJson}::jsonb)
+          FROM json_populate_recordset(NULL::product_variants, ${sql.raw(`'${variantsJson.replace(/'/g, "''")}'::jsonb`)})
           ON CONFLICT (organization_id, shopify_variant_id)
           DO UPDATE SET
             name = EXCLUDED.name,
