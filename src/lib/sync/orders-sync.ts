@@ -10,6 +10,7 @@ import { sql } from 'drizzle-orm';
 import { logger } from '../utils/logger';
 import { executeGraphQLQuery } from '../shopify/client';
 import { ORDERS_QUERY, type ShopifyOrder } from '../shopify/graphql-queries';
+import { updateSyncJobProgress } from '../../db/queries';
 
 export interface OrdersSyncOptions {
   organizationId: string;
@@ -166,6 +167,14 @@ export async function syncShopifyOrders(
       result.processedItems += orders.length;
       result.successCount += orders.length;
       result.totalItems += orders.length;
+
+      // Update sync job progress in database
+      await updateSyncJobProgress(syncJobId, {
+        processedItems: result.processedItems,
+        totalItems: result.totalItems,
+        successCount: result.successCount,
+        errorCount: result.errorCount,
+      });
 
       // Check if we should continue
       if (fetchAll) {
