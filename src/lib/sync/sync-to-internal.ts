@@ -276,21 +276,21 @@ export async function syncShopifyProductsToInternal(
 
           // Use raw SQL with INSERT ... ON CONFLICT that can handle the (product_id, name) constraint
           // by first deleting old variants with same (product_id, name) before inserting
-          const variantsJson = JSON.stringify(deduplicatedVariants);
+          const variantsJson = JSON.stringify(deduplicatedVariants).replace(/'/g, "''");
 
-          await db.execute(sql`
+          await db.execute(sql.raw(`
             -- First, delete any existing variants that would conflict on (product_id, name)
             DELETE FROM product_variants
             WHERE (product_id, name) IN (
               SELECT
                 (v->>'productId')::uuid,
                 v->>'name'
-              FROM jsonb_array_elements(${variantsJson}::jsonb) AS v
+              FROM jsonb_array_elements('${variantsJson}'::jsonb) AS v
             )
-            AND organization_id = ${organizationId}
+            AND organization_id = '${organizationId}'
             AND shopify_variant_id NOT IN (
               SELECT v->>'shopifyVariantId'
-              FROM jsonb_array_elements(${variantsJson}::jsonb) AS v
+              FROM jsonb_array_elements('${variantsJson}'::jsonb) AS v
             );
 
             -- Then insert with conflict resolution on shopify_variant_id
@@ -326,7 +326,7 @@ export async function syncShopifyProductsToInternal(
               (v->>'isDefault')::boolean,
               (v->>'isActive')::boolean,
               (v->>'isAvailable')::boolean
-            FROM jsonb_array_elements(${variantsJson}::jsonb) AS v
+            FROM jsonb_array_elements('${variantsJson}'::jsonb) AS v
             ON CONFLICT (organization_id, shopify_variant_id)
             DO UPDATE SET
               product_id = EXCLUDED.product_id,
@@ -343,7 +343,7 @@ export async function syncShopifyProductsToInternal(
               inventory_quantity = EXCLUDED.inventory_quantity,
               is_available = EXCLUDED.is_available,
               updated_at = NOW()
-          `);
+          `));
 
           result.variantsCreated += deduplicatedVariants.length;
           logger.info({
