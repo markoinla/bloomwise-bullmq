@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { logger } from './lib/utils/logger';
 import { startDashboard } from './dashboard';
 import { shopifyProductsWorker } from './queues/shopify-products';
+import { shopifyOrdersWorker } from './queues/shopify-orders';
 
 async function main() {
   logger.info('Starting Bloomwise BullMQ Worker Service...');
@@ -24,13 +25,17 @@ async function main() {
   // Workers are already initialized and listening
   logger.info('Workers initialized:');
   logger.info('  - shopify-products (listening)');
+  logger.info('  - shopify-orders (listening)');
   logger.info('Worker service is ready to process jobs');
 
   // Graceful shutdown
   const shutdown = async () => {
     logger.info('Shutting down worker service...');
 
-    await shopifyProductsWorker.close();
+    await Promise.all([
+      shopifyProductsWorker.close(),
+      shopifyOrdersWorker.close(),
+    ]);
     logger.info('Workers closed');
 
     process.exit(0);

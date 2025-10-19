@@ -9,7 +9,7 @@
  * These schemas must match the bloomwise main database exactly.
  */
 
-import { pgTable, text, timestamp, integer, jsonb, boolean, pgEnum, uuid, numeric } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, integer, jsonb, boolean, pgEnum, uuid, numeric, index, uniqueIndex } from "drizzle-orm/pg-core";
 
 // ============================================
 // Sync Jobs Tables
@@ -269,6 +269,69 @@ export const shopifyVariants = pgTable("shopify_variants", {
 });
 
 // ============================================
+// Shopify Orders Table
+// ============================================
+
+export const shopifyOrders = pgTable("shopify_orders", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull(),
+
+  // Shopify identifiers
+  shopifyOrderId: text("shopify_order_id").notNull(),
+  shopifyOrderNumber: text("shopify_order_number").notNull(),
+  name: text("name"),
+
+  // Timestamps from Shopify
+  shopifyCreatedAt: timestamp("shopify_created_at").notNull(),
+  shopifyUpdatedAt: timestamp("shopify_updated_at").notNull(),
+  shopifyCancelledAt: timestamp("shopify_cancelled_at"),
+
+  // Customer info
+  customerEmail: text("customer_email"),
+  customerPhone: text("customer_phone"),
+  customerName: text("customer_name"),
+  shopifyCustomerId: text("shopify_customer_id"),
+
+  // Order status
+  financialStatus: text("financial_status").notNull(),
+  fulfillmentStatus: text("fulfillment_status"),
+  cancelReason: text("cancel_reason"),
+
+  // Pricing
+  currency: text("currency").notNull(),
+  totalPrice: text("total_price").notNull(),
+  subtotalPrice: text("subtotal_price"),
+  totalTax: text("total_tax"),
+  totalDiscounts: text("total_discounts"),
+
+  // Metadata
+  tags: text("tags"),
+  note: text("note"),
+  confirmed: boolean("confirmed").default(false),
+  test: boolean("test").default(false),
+
+  // Additional data
+  lineItemsData: jsonb("line_items_data"),
+  shippingAddress: jsonb("shipping_address"),
+  billingAddress: jsonb("billing_address"),
+  fulfillments: jsonb("fulfillments"),
+
+  // Complete raw JSON from Shopify
+  rawData: jsonb("raw_data").notNull(),
+
+  // Sync metadata
+  syncedAt: timestamp("synced_at").notNull().defaultNow(),
+
+  // Timestamps
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  orgIdIdx: index("shopify_orders_org_id_idx").on(table.organizationId),
+  shopifyOrderIdIdx: index("shopify_orders_shopify_id_idx").on(table.shopifyOrderId),
+  uniqueShopifyOrder: uniqueIndex("shopify_orders_unique").on(table.organizationId, table.shopifyOrderId),
+}));
+
+// ============================================
 // Internal Products Tables
 // ============================================
 
@@ -368,6 +431,8 @@ export type ShopifyProduct = typeof shopifyProducts.$inferSelect;
 export type ShopifyProductInsert = typeof shopifyProducts.$inferInsert;
 export type ShopifyVariant = typeof shopifyVariants.$inferSelect;
 export type ShopifyVariantInsert = typeof shopifyVariants.$inferInsert;
+export type ShopifyOrder = typeof shopifyOrders.$inferSelect;
+export type ShopifyOrderInsert = typeof shopifyOrders.$inferInsert;
 export type Product = typeof products.$inferSelect;
 export type ProductInsert = typeof products.$inferInsert;
 export type ProductVariant = typeof productVariants.$inferSelect;

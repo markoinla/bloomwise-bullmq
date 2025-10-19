@@ -1,0 +1,265 @@
+/**
+ * Shopify Orders Sync using GraphQL
+ *
+ * Fetches orders from Shopify and syncs to shopify_orders table
+ */
+
+import { db } from '../../config/database';
+import { shopifyOrders } from '../../db/schema';
+import { sql } from 'drizzle-orm';
+import { logger } from '../utils/logger';
+import { executeGraphQLQuery } from '../shopify/client';
+import { ORDERS_QUERY, type ShopifyOrder } from '../shopify/graphql-queries';
+
+export interface OrdersSyncOptions {
+  organizationId: string;
+  syncJobId: string;
+  shopDomain: string;
+  accessToken: string;
+  fetchAll?: boolean;
+  cursor?: string;
+  updatedAtMin?: Date;
+}
+
+export interface OrdersSyncResult {
+  success: boolean;
+  totalItems: number;
+  processedItems: number;
+  successCount: number;
+  errorCount: number;
+  skipCount: number;
+  hasNextPage: boolean;
+  endCursor?: string;
+}
+
+/**
+ * Sync Shopify orders using GraphQL API
+ */
+export async function syncShopifyOrders(
+  options: OrdersSyncOptions
+): Promise<OrdersSyncResult> {
+  const {
+    organizationId,
+    syncJobId,
+    shopDomain,
+    accessToken,
+    fetchAll = false,
+    cursor,
+    updatedAtMin,
+  } = options;
+
+  const result: OrdersSyncResult = {
+    success: true,
+    totalItems: 0,
+    processedItems: 0,
+    successCount: 0,
+    errorCount: 0,
+    skipCount: 0,
+    hasNextPage: false,
+  };
+
+  logger.info(
+    { organizationId, syncJobId, shopDomain, fetchAll },
+    'Starting Shopify orders sync'
+  );
+
+  try {
+    // Build GraphQL query filter
+    let graphqlQuery = '';
+    if (!fetchAll && updatedAtMin) {
+      // Add 2-minute buffer for API timing differences
+      const bufferedDate = new Date(updatedAtMin.getTime() - 2 * 60 * 1000);
+      graphqlQuery = `updated_at:>='${bufferedDate.toISOString()}'`;
+    }
+
+    let batchNumber = 0;
+    let currentCursor = cursor;
+    let hasMore = true;
+
+    while (hasMore) {
+      batchNumber++;
+      logger.info(
+        { batchNumber, cursor: currentCursor, syncJobId },
+        'Fetching orders batch from Shopify'
+      );
+
+      // Fetch orders using GraphQL
+      const response = await executeGraphQLQuery<{
+        orders: {
+          edges: Array<{ node: ShopifyOrder; cursor: string }>;
+          pageInfo: {
+            hasNextPage: boolean;
+            hasPreviousPage: boolean;
+            startCursor: string;
+            endCursor: string;
+          };
+        };
+      }>(
+        { shopDomain, accessToken },
+        ORDERS_QUERY,
+        {
+          first: 100, // Reduced batch size for orders (more complex data)
+          after: currentCursor,
+          query: graphqlQuery,
+          sortKey: 'UPDATED_AT',
+          reverse: true, // Newest first
+        }
+      );
+
+      if (response.errors) {
+        throw new Error(`GraphQL errors: ${response.errors.map(e => e.message).join(', ')}`);
+      }
+
+      if (!response.data?.orders) {
+        throw new Error('No orders data in GraphQL response');
+      }
+
+      const orders = response.data.orders.edges.map(edge => edge.node);
+      const pageInfo = response.data.orders.pageInfo;
+
+      logger.info({ count: orders.length, batchNumber }, 'Received orders from Shopify');
+
+      if (orders.length === 0) {
+        break;
+      }
+
+      // Transform and batch upsert orders
+      const ordersToUpsert = orders.map(order => transformGraphQLOrder(order, organizationId));
+
+      if (ordersToUpsert.length > 0) {
+        await db
+          .insert(shopifyOrders)
+          .values(ordersToUpsert)
+          .onConflictDoUpdate({
+            target: [shopifyOrders.organizationId, shopifyOrders.shopifyOrderId],
+            set: {
+              shopifyOrderNumber: sql`excluded.shopify_order_number`,
+              name: sql`excluded.name`,
+              shopifyCreatedAt: sql`excluded.shopify_created_at`,
+              shopifyUpdatedAt: sql`excluded.shopify_updated_at`,
+              shopifyCancelledAt: sql`excluded.shopify_cancelled_at`,
+              customerEmail: sql`excluded.customer_email`,
+              customerPhone: sql`excluded.customer_phone`,
+              customerName: sql`excluded.customer_name`,
+              shopifyCustomerId: sql`excluded.shopify_customer_id`,
+              financialStatus: sql`excluded.financial_status`,
+              fulfillmentStatus: sql`excluded.fulfillment_status`,
+              cancelReason: sql`excluded.cancel_reason`,
+              currency: sql`excluded.currency`,
+              totalPrice: sql`excluded.total_price`,
+              subtotalPrice: sql`excluded.subtotal_price`,
+              totalTax: sql`excluded.total_tax`,
+              totalDiscounts: sql`excluded.total_discounts`,
+              tags: sql`excluded.tags`,
+              note: sql`excluded.note`,
+              confirmed: sql`excluded.confirmed`,
+              test: sql`excluded.test`,
+              rawData: sql`excluded.raw_data`,
+              syncedAt: sql`excluded.synced_at`,
+              updatedAt: new Date(),
+            },
+          });
+
+        logger.info({ count: ordersToUpsert.length }, 'Batch upserted orders');
+      }
+
+      result.processedItems += orders.length;
+      result.successCount += orders.length;
+      result.totalItems += orders.length;
+
+      // Check if we should continue
+      hasMore = pageInfo.hasNextPage && !fetchAll; // For incremental, process only first batch
+      currentCursor = pageInfo.endCursor;
+      result.hasNextPage = pageInfo.hasNextPage;
+      result.endCursor = currentCursor;
+
+      // For full sync, continue to next page
+      if (fetchAll && pageInfo.hasNextPage) {
+        // Add delay to respect rate limits
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } else {
+        break;
+      }
+    }
+
+    logger.info(
+      {
+        syncJobId,
+        totalProcessed: result.processedItems,
+        successCount: result.successCount,
+        errorCount: result.errorCount,
+      },
+      'Shopify orders sync completed'
+    );
+
+    return result;
+  } catch (error) {
+    logger.error({ error, syncJobId, organizationId }, 'Shopify orders sync failed');
+    result.success = false;
+    result.errorCount = result.totalItems - result.successCount;
+    throw error;
+  }
+}
+
+/**
+ * Transform GraphQL order to database format
+ */
+function transformGraphQLOrder(order: ShopifyOrder, organizationId: string) {
+  const shopifyOrderId = order.legacyResourceId;
+
+  // Extract customer name
+  const customerName = order.customer
+    ? `${order.customer.firstName || ''} ${order.customer.lastName || ''}`.trim() || null
+    : null;
+
+  // Extract line items with full details
+  const lineItems = order.lineItems.edges.map(edge => ({
+    id: edge.node.id,
+    title: edge.node.title,
+    quantity: edge.node.quantity,
+    price: edge.node.originalUnitPriceSet.shopMoney.amount,
+    discountedPrice: edge.node.discountedUnitPriceSet.shopMoney.amount,
+    totalPrice: edge.node.discountedTotalSet.shopMoney.amount,
+    variant: edge.node.variant ? {
+      id: edge.node.variant.legacyResourceId,
+      title: edge.node.variant.title,
+      sku: edge.node.variant.sku,
+      productId: edge.node.variant.product.legacyResourceId,
+      productTitle: edge.node.variant.product.title,
+    } : null,
+    customAttributes: edge.node.customAttributes,
+  }));
+
+  return {
+    organizationId,
+    shopifyOrderId,
+    shopifyOrderNumber: order.name.replace(/^#/, ''),
+    name: order.name,
+    shopifyCreatedAt: new Date(order.createdAt),
+    shopifyUpdatedAt: new Date(order.updatedAt),
+    shopifyCancelledAt: order.cancelledAt ? new Date(order.cancelledAt) : null,
+    customerEmail: order.email || order.customer?.email || null,
+    customerPhone: order.phone || order.customer?.phone || null,
+    customerName,
+    shopifyCustomerId: order.customer?.legacyResourceId || null,
+    financialStatus: order.displayFinancialStatus.toLowerCase(),
+    fulfillmentStatus: order.displayFulfillmentStatus.toLowerCase(),
+    cancelReason: order.cancelReason || null,
+    currency: order.totalPriceSet.shopMoney.currencyCode,
+    totalPrice: order.totalPriceSet.shopMoney.amount,
+    subtotalPrice: order.subtotalPriceSet.shopMoney.amount,
+    totalTax: order.totalTaxSet.shopMoney.amount,
+    totalDiscounts: order.totalDiscountsSet.shopMoney.amount,
+    tags: order.tags.join(','),
+    note: order.note || null,
+    confirmed: order.confirmed,
+    test: false, // GraphQL doesn't expose test field
+    lineItemsData: lineItems,
+    shippingAddress: order.shippingAddress || null,
+    billingAddress: order.billingAddress || null,
+    fulfillments: order.fulfillments || [],
+    rawData: order,
+    syncedAt: new Date(),
+    updatedAt: new Date(),
+  };
+}
