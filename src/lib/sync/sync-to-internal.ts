@@ -120,6 +120,8 @@ export async function syncShopifyProductsToInternal(
 
       // 4. Batch upsert products using raw SQL
       if (productsToUpsert.length > 0) {
+        const productsJson = JSON.stringify(productsToUpsert);
+
         await db.execute(sql`
           INSERT INTO products (
             organization_id, shopify_product_id, shopify_variant_ids, type, name, description,
@@ -128,7 +130,7 @@ export async function syncShopifyProductsToInternal(
             is_active, is_published, published_at, track_inventory, inventory_quantity, allow_backorder
           )
           SELECT *
-          FROM json_populate_recordset(NULL::products, ${JSON.stringify(productsToUpsert)})
+          FROM json_populate_recordset(NULL::products, ${productsJson}::jsonb)
           ON CONFLICT (organization_id, shopify_product_id)
           DO UPDATE SET
             name = EXCLUDED.name,
@@ -196,6 +198,8 @@ export async function syncShopifyProductsToInternal(
 
       // 7. Batch upsert variants using raw SQL
       if (variantsToUpsert.length > 0) {
+        const variantsJson = JSON.stringify(variantsToUpsert);
+
         await db.execute(sql`
           INSERT INTO product_variants (
             organization_id, product_id, shopify_variant_id, name, sku, barcode,
@@ -205,7 +209,7 @@ export async function syncShopifyProductsToInternal(
             sort_order, is_default, is_active, is_available
           )
           SELECT *
-          FROM json_populate_recordset(NULL::product_variants, ${JSON.stringify(variantsToUpsert)})
+          FROM json_populate_recordset(NULL::product_variants, ${variantsJson}::jsonb)
           ON CONFLICT (organization_id, shopify_variant_id)
           DO UPDATE SET
             name = EXCLUDED.name,
