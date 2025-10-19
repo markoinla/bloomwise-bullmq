@@ -230,7 +230,7 @@ export async function syncShopifyProductsToInternal(
         })
         .filter((v): v is NonNullable<typeof v> => v !== null);
 
-      // 7. Batch upsert variants using Drizzle
+      // 7. Batch upsert variants using optimized approach
       if (variantsToUpsert.length > 0) {
         try {
           // Map to Drizzle insert format (camelCase)
@@ -261,34 +261,49 @@ export async function syncShopifyProductsToInternal(
             isAvailable: v.is_available,
           }));
 
-          // Insert variants one by one to handle multiple unique constraints
-          for (const variant of variantsForDrizzle) {
-            await db
-              .insert(productVariants)
-              .values(variant)
-              .onConflictDoUpdate({
-                target: [productVariants.organizationId, productVariants.shopifyVariantId],
-                set: {
-                  productId: variant.productId,
-                  name: variant.name,
-                  sku: variant.sku,
-                  barcode: variant.barcode,
-                  price: variant.price,
-                  compareAtPrice: variant.compareAtPrice,
-                  weight: variant.weight,
-                  option1Value: variant.option1Value,
-                  option2Value: variant.option2Value,
-                  option3Value: variant.option3Value,
-                  imageUrl: variant.imageUrl,
-                  inventoryQuantity: variant.inventoryQuantity,
-                  isAvailable: variant.isAvailable,
-                  updatedAt: new Date(),
-                },
-              });
-          }
+          // De-duplicate by (product_id, name) within the batch to avoid constraint violations
+          // Keep the first occurrence of each (product_id, name) combo
+          const seenProductNames = new Set<string>();
+          const deduplicatedVariants = variantsForDrizzle.filter(v => {
+            const key = `${v.productId}:${v.name}`;
+            if (seenProductNames.has(key)) {
+              logger.warn({ productId: v.productId, name: v.name }, 'Skipping duplicate variant name within batch');
+              return false;
+            }
+            seenProductNames.add(key);
+            return true;
+          });
 
-          result.variantsCreated += variantsToUpsert.length;
-          logger.info({ batch: batchNumber, count: variantsToUpsert.length }, 'Batch upserted variants to internal');
+          // Batch insert with conflict resolution on shopify_variant_id
+          await db
+            .insert(productVariants)
+            .values(deduplicatedVariants)
+            .onConflictDoUpdate({
+              target: [productVariants.organizationId, productVariants.shopifyVariantId],
+              set: {
+                productId: deduplicatedVariants[0].productId, // Drizzle uses EXCLUDED
+                name: deduplicatedVariants[0].name,
+                sku: deduplicatedVariants[0].sku,
+                barcode: deduplicatedVariants[0].barcode,
+                price: deduplicatedVariants[0].price,
+                compareAtPrice: deduplicatedVariants[0].compareAtPrice,
+                weight: deduplicatedVariants[0].weight,
+                option1Value: deduplicatedVariants[0].option1Value,
+                option2Value: deduplicatedVariants[0].option2Value,
+                option3Value: deduplicatedVariants[0].option3Value,
+                imageUrl: deduplicatedVariants[0].imageUrl,
+                inventoryQuantity: deduplicatedVariants[0].inventoryQuantity,
+                isAvailable: deduplicatedVariants[0].isAvailable,
+                updatedAt: new Date(),
+              },
+            });
+
+          result.variantsCreated += deduplicatedVariants.length;
+          logger.info({
+            batch: batchNumber,
+            count: deduplicatedVariants.length,
+            skipped: variantsToUpsert.length - deduplicatedVariants.length
+          }, 'Batch upserted variants to internal');
         } catch (error) {
           logger.error({
             error,
