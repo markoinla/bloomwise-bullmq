@@ -43,7 +43,7 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
 
     // If specific shopify_order IDs provided, only sync those
     if (shopifyOrderIds && shopifyOrderIds.length > 0) {
-      conditions.push(sql`${shopifyOrders.shopifyOrderId} = ANY(${shopifyOrderIds})`);
+      conditions.push(sql`${shopifyOrders.shopifyOrderId} = ANY(ARRAY[${sql.join(shopifyOrderIds.map(id => sql`${id}`), sql`, `)}])`);
     }
 
     const shopifyOrdersToSync = await db
@@ -68,7 +68,7 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
       .where(
         and(
           eq(orders.organizationId, organizationId),
-          sql`${orders.shopifyOrderId} = ANY(${shopifyOrderIdsToCheck})`
+          sql`${orders.shopifyOrderId} = ANY(ARRAY[${sql.join(shopifyOrderIdsToCheck.map(id => sql`${id}`), sql`, `)}])`
         )
       );
 
@@ -284,10 +284,10 @@ function transformShopifyOrderToInternal(shopifyOrder: any) {
     specialInstructions: shopifyOrder.note,
     source: 'shopify',
     tags: shopifyOrder.tags ? [shopifyOrder.tags] : [],
-    createdBy: 'system',
+    createdBy: null, // System-created orders don't have a user reference
     assignedTo: null,
     cancelledAt: shopifyOrder.shopifyCancelledAt,
-    cancelledBy: shopifyOrder.shopifyCancelledAt ? 'shopify' : null,
+    cancelledBy: null, // Cancelled orders don't have a user reference (external cancellation)
     cancellationReason: shopifyOrder.cancelReason,
   };
 }
@@ -324,7 +324,7 @@ async function updateInternalOrder(shopifyOrder: any, internalOrderId: string): 
       shopifySyncedAt: shopifyOrder.syncedAt,
       paidAmount: paymentStatus === 'paid' ? shopifyOrder.totalPrice : null,
       cancelledAt: shopifyOrder.shopifyCancelledAt,
-      cancelledBy: shopifyOrder.shopifyCancelledAt ? 'shopify' : null,
+      cancelledBy: null, // Cancelled orders don't have a user reference (external cancellation)
       cancellationReason: shopifyOrder.cancelReason,
       updatedAt: new Date(),
     })
