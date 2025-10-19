@@ -152,7 +152,6 @@ export async function syncShopifyOrders(
               totalDiscounts: sql`excluded.total_discounts`,
               tags: sql`excluded.tags`,
               note: sql`excluded.note`,
-              confirmed: sql`excluded.confirmed`,
               test: sql`excluded.test`,
               rawData: sql`excluded.raw_data`,
               syncedAt: sql`excluded.synced_at`,
@@ -212,24 +211,6 @@ function transformGraphQLOrder(order: ShopifyOrder, organizationId: string) {
     ? `${order.customer.firstName || ''} ${order.customer.lastName || ''}`.trim() || null
     : null;
 
-  // Extract line items with full details
-  const lineItems = order.lineItems.edges.map(edge => ({
-    id: edge.node.id,
-    title: edge.node.title,
-    quantity: edge.node.quantity,
-    price: edge.node.originalUnitPriceSet.shopMoney.amount,
-    discountedPrice: edge.node.discountedUnitPriceSet.shopMoney.amount,
-    totalPrice: edge.node.discountedTotalSet.shopMoney.amount,
-    variant: edge.node.variant ? {
-      id: edge.node.variant.legacyResourceId,
-      title: edge.node.variant.title,
-      sku: edge.node.variant.sku,
-      productId: edge.node.variant.product.legacyResourceId,
-      productTitle: edge.node.variant.product.title,
-    } : null,
-    customAttributes: edge.node.customAttributes,
-  }));
-
   return {
     organizationId,
     shopifyOrderId,
@@ -252,13 +233,9 @@ function transformGraphQLOrder(order: ShopifyOrder, organizationId: string) {
     totalDiscounts: order.totalDiscountsSet.shopMoney.amount,
     tags: order.tags.join(','),
     note: order.note || null,
-    confirmed: order.confirmed,
     test: false, // GraphQL doesn't expose test field
-    lineItemsData: lineItems,
-    shippingAddress: order.shippingAddress || null,
-    billingAddress: order.billingAddress || null,
-    fulfillments: order.fulfillments || [],
     rawData: order,
+    apiVersion: '2024-10', // Shopify API version
     syncedAt: new Date(),
     updatedAt: new Date(),
   };
