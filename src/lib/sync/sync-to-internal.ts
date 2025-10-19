@@ -228,7 +228,7 @@ export async function syncShopifyProductsToInternal(
             is_available: (sv.inventoryQuantity || 0) > 0,
           };
         })
-        .filter(Boolean);
+        .filter((v): v is NonNullable<typeof v> => v !== null);
 
       // 7. Batch upsert variants using Drizzle
       if (variantsToUpsert.length > 0) {
