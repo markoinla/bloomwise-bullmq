@@ -9,7 +9,7 @@
  * These schemas must match the bloomwise main database exactly.
  */
 
-import { pgTable, text, timestamp, integer, jsonb, boolean, pgEnum, uuid, numeric, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, integer, jsonb, boolean, pgEnum, uuid, numeric, index, uniqueIndex, date, time } from "drizzle-orm/pg-core";
 
 // ============================================
 // Sync Jobs Tables
@@ -307,20 +307,26 @@ export const shopifyOrders = pgTable("shopify_orders", {
   // Metadata
   tags: text("tags"),
   note: text("note"),
-  confirmed: boolean("confirmed").default(false),
+  sourceUrl: text("source_url"),
+  sourceName: text("source_name"),
   test: boolean("test").default(false),
 
-  // Additional data
-  lineItemsData: jsonb("line_items_data"),
-  shippingAddress: jsonb("shipping_address"),
-  billingAddress: jsonb("billing_address"),
-  fulfillments: jsonb("fulfillments"),
+  // Pickup details
+  pickupDate: date("pickup_date"),
+  pickupTime: time("pickup_time"),
+  pickupLocation: text("pickup_location"),
+  pickupLocationAddress: text("pickup_location_address"),
 
   // Complete raw JSON from Shopify
   rawData: jsonb("raw_data").notNull(),
 
-  // Sync metadata
+  // API and sync metadata
+  apiVersion: text("api_version").notNull().default("2024-10"),
   syncedAt: timestamp("synced_at").notNull().defaultNow(),
+  lastWebhookAt: timestamp("last_webhook_at"),
+
+  // Internal reference
+  internalOrderId: uuid("internal_order_id"),
 
   // Timestamps
   createdAt: timestamp("created_at").notNull().defaultNow(),

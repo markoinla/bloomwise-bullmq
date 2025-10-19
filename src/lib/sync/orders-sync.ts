@@ -154,6 +154,7 @@ export async function syncShopifyOrders(
               note: sql`excluded.note`,
               test: sql`excluded.test`,
               rawData: sql`excluded.raw_data`,
+              apiVersion: sql`excluded.api_version`,
               syncedAt: sql`excluded.synced_at`,
               updatedAt: new Date(),
             },
