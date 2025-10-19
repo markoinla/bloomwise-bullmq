@@ -299,45 +299,6 @@ function transformShopifyOrderToInternal(shopifyOrder: any) {
   };
 }
 
-async function updateInternalOrder(shopifyOrder: any, internalOrderId: string): Promise<void> {
-  // Determine order status
-  let status = 'pending';
-  if (shopifyOrder.shopifyCancelledAt) {
-    status = 'cancelled';
-  } else if (shopifyOrder.fulfillmentStatus === 'fulfilled') {
-    status = 'completed';
-  } else if (shopifyOrder.financialStatus === 'paid') {
-    status = 'confirmed';
-  }
-
-  // Determine payment status
-  let paymentStatus = 'unpaid';
-  if (shopifyOrder.financialStatus === 'paid') {
-    paymentStatus = 'paid';
-  } else if (shopifyOrder.financialStatus === 'partially_paid') {
-    paymentStatus = 'partially_paid';
-  } else if (shopifyOrder.financialStatus === 'refunded' || shopifyOrder.financialStatus === 'partially_refunded') {
-    paymentStatus = 'refunded';
-  }
-
-  await db
-    .update(orders)
-    .set({
-      status,
-      paymentStatus,
-      completedAt: shopifyOrder.fulfillmentStatus === 'fulfilled' ? shopifyOrder.shopifyUpdatedAt : null,
-      shopifyFinancialStatus: shopifyOrder.financialStatus,
-      shopifyFulfillmentStatus: shopifyOrder.fulfillmentStatus,
-      shopifySyncedAt: shopifyOrder.syncedAt,
-      paidAmount: paymentStatus === 'paid' ? shopifyOrder.totalPrice : null,
-      cancelledAt: shopifyOrder.shopifyCancelledAt,
-      cancelledBy: null, // Cancelled orders don't have a user reference (external cancellation)
-      cancellationReason: shopifyOrder.cancelReason,
-      updatedAt: new Date(),
-    })
-    .where(eq(orders.id, internalOrderId));
-}
-
 function transformOrderItems(shopifyOrder: any, internalOrderId: string) {
   const rawData = shopifyOrder.rawData as any;
   const lineItems = rawData.lineItems?.edges || [];
