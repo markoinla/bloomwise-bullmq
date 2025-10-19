@@ -4,7 +4,7 @@
 
 import { db } from '../../config/database';
 import { shopifyOrders, orders, orderItems } from '../../db/schema';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, sql, inArray } from 'drizzle-orm';
 import { logger } from '../utils/logger';
 
 interface OrderSyncOptions {
@@ -129,13 +129,11 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
       logger.info({ count: createdOrders.length }, 'Batch created new orders');
     }
 
-    // Batch update existing orders
+    // For existing orders, we just need to link them (no need to update fields)
+    // The orders were already created correctly, we're just establishing the relationship
     if (ordersToUpdate.length > 0) {
-      for (const { shopifyOrder, existingOrder } of ordersToUpdate) {
-        await updateInternalOrder(shopifyOrder, existingOrder.id);
-      }
       result.ordersProcessed += ordersToUpdate.length;
-      logger.info({ count: ordersToUpdate.length }, 'Updated existing orders');
+      logger.info({ count: ordersToUpdate.length }, 'Found existing orders to link');
     }
 
     // Batch create order items for all orders
@@ -153,7 +151,7 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
       const orderIds = shopifyOrdersToLink.map(o => o.internalOrderId);
       await db
         .delete(orderItems)
-        .where(sql`${orderItems.orderId} = ANY(${orderIds})`);
+        .where(inArray(orderItems.orderId, orderIds));
 
       // Batch insert all items
       await db.insert(orderItems).values(allOrderItems);
@@ -161,12 +159,21 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
       logger.info({ count: allOrderItems.length }, 'Batch created order items');
     }
 
-    // Batch update shopify_orders with internal_order_id
-    for (const { shopifyOrderId, internalOrderId } of shopifyOrdersToLink) {
-      await db
-        .update(shopifyOrders)
-        .set({ internalOrderId })
-        .where(eq(shopifyOrders.id, shopifyOrderId));
+    // Batch update shopify_orders with internal_order_id using a single SQL statement
+    if (shopifyOrdersToLink.length > 0) {
+      const values = shopifyOrdersToLink.map(
+        ({ shopifyOrderId, internalOrderId }) =>
+          sql`(${shopifyOrderId}::uuid, ${internalOrderId}::uuid)`
+      );
+
+      await db.execute(sql`
+        UPDATE ${shopifyOrders}
+        SET internal_order_id = v.internal_order_id::uuid
+        FROM (VALUES ${sql.join(values, sql`, `)}) AS v(id, internal_order_id)
+        WHERE ${shopifyOrders.id} = v.id::uuid
+      `);
+
+      logger.info({ count: shopifyOrdersToLink.length }, 'Batch updated shopify_orders with internal_order_id');
     }
 
     logger.info(
