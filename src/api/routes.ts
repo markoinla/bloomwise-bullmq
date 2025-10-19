@@ -126,7 +126,7 @@ router.post('/sync/products', async (req: Request, res: Response) => {
  */
 router.post('/sync/orders', async (req: Request, res: Response) => {
   try {
-    const { organizationId, integrationId } = req.body;
+    const { organizationId, integrationId, fetchAll = false } = req.body;
 
     if (!organizationId) {
       return res.status(400).json({
@@ -134,7 +134,7 @@ router.post('/sync/orders', async (req: Request, res: Response) => {
       });
     }
 
-    logger.info({ organizationId }, 'API: Enqueue orders sync request');
+    logger.info({ organizationId, fetchAll }, 'API: Enqueue orders sync request');
 
     // Find Shopify integration
     let integration;
@@ -170,9 +170,10 @@ router.post('/sync/orders', async (req: Request, res: Response) => {
     await db.insert(syncJobs).values({
       id: syncJobId,
       organizationId,
-      type: 'shopify_orders_incremental',
+      type: fetchAll ? 'shopify_orders_initial' : 'shopify_orders_incremental',
       status: 'pending',
       config: {
+        fetchAll,
         source: 'api',
       },
       createdAt: now,
@@ -184,7 +185,7 @@ router.post('/sync/orders', async (req: Request, res: Response) => {
       syncJobId,
       organizationId,
       integrationId: integration.id,
-      type: 'incremental',
+      fetchAll,
     });
 
     logger.info(
@@ -204,6 +205,7 @@ router.post('/sync/orders', async (req: Request, res: Response) => {
       organizationId,
       integrationId: integration.id,
       shopDomain: integration.shopDomain,
+      type: fetchAll ? 'full' : 'incremental',
       message: 'Sync job enqueued successfully',
       dashboardUrl: `https://jobs.bloomwise.co`,
     });
