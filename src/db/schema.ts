@@ -429,6 +429,156 @@ export const productVariants = pgTable("product_variants", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+// ============================================
+// Internal Orders Tables
+// ============================================
+
+export const orders = pgTable("orders", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull(),
+
+  // Order identification
+  orderNumber: text("order_number").notNull(),
+  customerId: uuid("customer_id"),
+  customerName: text("customer_name").notNull(),
+  customerEmail: text("customer_email"),
+  customerPhone: text("customer_phone"),
+
+  // Order status
+  status: text("status").notNull(), // draft, pending, confirmed, in_progress, completed, cancelled
+  priority: text("priority").notNull().default("normal"), // low, normal, high, urgent
+  orderDate: timestamp("order_date").notNull(),
+  dueDate: date("due_date").notNull(),
+  dueTime: time("due_time"),
+  completedAt: timestamp("completed_at"),
+
+  // Fulfillment
+  fulfillmentType: text("fulfillment_type").notNull(), // pickup, delivery, shipping
+  deliveryAddress: text("delivery_address"),
+  deliveryInstructions: text("delivery_instructions"),
+  deliveryFee: numeric("delivery_fee"),
+
+  // Shipping details
+  shippingName: text("shipping_name"),
+  shippingPhone: text("shipping_phone"),
+  shippingEmail: text("shipping_email"),
+  shippingAddress1: text("shipping_address1"),
+  shippingAddress2: text("shipping_address2"),
+  shippingCity: text("shipping_city"),
+  shippingState: text("shipping_state"),
+  shippingZip: text("shipping_zip"),
+  shippingCountry: text("shipping_country"),
+  shippingCompany: text("shipping_company"),
+
+  // Billing details
+  billingName: text("billing_name"),
+  billingPhone: text("billing_phone"),
+  billingEmail: text("billing_email"),
+  billingAddress1: text("billing_address1"),
+  billingAddress2: text("billing_address2"),
+  billingCity: text("billing_city"),
+  billingState: text("billing_state"),
+  billingZip: text("billing_zip"),
+  billingCountry: text("billing_country"),
+  billingCompany: text("billing_company"),
+
+  // Financials
+  subtotal: numeric("subtotal").notNull(),
+  taxAmount: numeric("tax_amount"),
+  discountAmount: numeric("discount_amount"),
+  total: numeric("total").notNull(),
+  totalCost: numeric("total_cost"),
+  profitAmount: numeric("profit_amount"),
+  profitMargin: integer("profit_margin"),
+
+  // Payment
+  paymentStatus: text("payment_status").notNull(), // unpaid, partially_paid, paid, refunded
+  paymentMethod: text("payment_method"),
+  paidAmount: numeric("paid_amount"),
+
+  // External integrations
+  externalOrderId: text("external_order_id"),
+  orderSource: text("order_source").notNull(), // manual, shopify, seal, api
+  shopifyOrderId: text("shopify_order_id"),
+  shopifyOrderNumber: text("shopify_order_number"),
+  shopifyFulfillmentId: text("shopify_fulfillment_id"),
+  shopifyFinancialStatus: text("shopify_financial_status"),
+  shopifyFulfillmentStatus: text("shopify_fulfillment_status"),
+  shopifyTags: text("shopify_tags"),
+  shopifyCurrency: text("shopify_currency"),
+  shopifySyncedAt: timestamp("shopify_synced_at"),
+
+  // Notes and metadata
+  internalNotes: text("internal_notes"),
+  customerNotes: text("customer_notes"),
+  specialInstructions: text("special_instructions"),
+  source: text("source").notNull().default("manual"),
+  tags: text("tags").array(),
+
+  // Assignment and tracking
+  createdBy: text("created_by"),
+  assignedTo: text("assigned_to"),
+
+  // Cancellation
+  cancelledAt: timestamp("cancelled_at"),
+  cancelledBy: text("cancelled_by"),
+  cancellationReason: text("cancellation_reason"),
+
+  // Timestamps
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const orderItems = pgTable("order_items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull(),
+  orderId: uuid("order_id").notNull(),
+
+  // Product references
+  productId: uuid("product_id"),
+  productVariantId: uuid("product_variant_id"),
+  itemType: text("item_type").notNull(), // product, recipe, custom
+  recipeId: uuid("recipe_id"),
+  variantId: uuid("variant_id"),
+  inventoryItemId: uuid("inventory_item_id"),
+
+  // Item details
+  name: text("name").notNull(),
+  description: text("description"),
+  quantity: integer("quantity").notNull(),
+  unitPrice: numeric("unit_price").notNull(),
+  subtotal: numeric("subtotal").notNull(),
+
+  // Costing
+  unitCost: numeric("unit_cost"),
+  totalCost: numeric("total_cost"),
+  recipeLaborMinutes: integer("recipe_labor_minutes"),
+  recipeRetailPrice: numeric("recipe_retail_price"),
+  recipeMaterialCost: numeric("recipe_material_cost"),
+
+  // External identifiers
+  externalItemId: text("external_item_id"),
+  externalSku: text("external_sku"),
+  shopifyProductId: text("shopify_product_id"),
+  shopifyVariantId: text("shopify_variant_id"),
+  recipeVariantId: uuid("recipe_variant_id"),
+
+  // Customization
+  customizations: jsonb("customizations"),
+  substitutions: jsonb("substitutions"),
+
+  // Status tracking
+  status: text("status").notNull().default("pending"), // pending, in_progress, completed, cancelled
+  completedAt: timestamp("completed_at"),
+  completedBy: text("completed_by"),
+  notes: text("notes"),
+  displayOrder: integer("display_order").notNull().default(0),
+
+  // Timestamps
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
 // Type exports for use in job processors
 export type SyncJob = typeof syncJobs.$inferSelect;
 export type SyncJobInsert = typeof syncJobs.$inferInsert;

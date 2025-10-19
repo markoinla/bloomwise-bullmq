@@ -8,6 +8,7 @@ import { Worker, Job } from 'bullmq';
 import { redisConnection } from '../config/redis';
 import { logger, createJobLogger } from '../lib/utils/logger';
 import { syncShopifyOrders } from '../lib/sync/orders-sync';
+import { syncOrdersToInternal } from '../lib/sync/sync-orders-to-internal';
 import {
   getShopifyIntegration,
   getSyncJob,
@@ -75,7 +76,24 @@ async function processShopifyOrdersSync(job: Job<ShopifyOrdersJobData>) {
       updatedAtMin: fetchAll ? undefined : integration.lastOrderSyncAt || undefined,
     });
 
-    // 5. Mark job as completed
+    // 5. Sync to internal orders and order_items tables
+    jobLogger.info({ syncJobId }, 'Syncing Shopify orders to internal tables');
+
+    const internalSyncResult = await syncOrdersToInternal({
+      organizationId,
+      syncJobId,
+    });
+
+    jobLogger.info(
+      {
+        ordersProcessed: internalSyncResult.ordersProcessed,
+        orderItemsCreated: internalSyncResult.orderItemsCreated,
+        errors: internalSyncResult.errors,
+      },
+      'Completed internal orders sync'
+    );
+
+    // 6. Mark job as completed
     await markSyncJobCompleted(syncJobId, {
       totalItems: syncResult.totalItems,
       processedItems: syncResult.processedItems,
@@ -84,7 +102,7 @@ async function processShopifyOrdersSync(job: Job<ShopifyOrdersJobData>) {
       skipCount: syncResult.skipCount,
     });
 
-    // 6. Update integration last sync timestamp
+    // 7. Update integration last sync timestamp
     await db
       .update(shopifyIntegrations)
       .set({
