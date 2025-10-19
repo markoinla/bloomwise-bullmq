@@ -26,6 +26,28 @@ createBullBoard({
 
 const app = express();
 
+// CORS middleware - allow *.bloomwise.co domains
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+
+  // Allow requests from *.bloomwise.co or localhost for development
+  if (origin && (origin.endsWith('.bloomwise.co') || origin.includes('localhost'))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
+  next();
+});
+
 // Parse JSON body
 app.use(express.json());
 
