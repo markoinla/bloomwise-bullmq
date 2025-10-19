@@ -154,7 +154,7 @@ export async function syncShopifyProductsToInternal(
         SELECT id, shopify_product_id
         FROM products
         WHERE organization_id = ${organizationId}
-          AND shopify_product_id = ANY(${batchIds})
+          AND shopify_product_id = ANY(ARRAY[${sql.join(batchIds.map(id => sql`${id}`), sql`, `)}])
       `);
 
       const productIdMap = new Map(
