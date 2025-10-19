@@ -11,6 +11,7 @@ import { logger } from '../utils/logger';
 import { executeGraphQLQuery } from '../shopify/client';
 import { ORDERS_QUERY, type ShopifyOrder } from '../shopify/graphql-queries';
 import { updateSyncJobProgress } from '../../db/queries';
+import { syncOrdersToInternal } from './sync-orders-to-internal';
 
 export interface OrdersSyncOptions {
   organizationId: string;
@@ -99,7 +100,7 @@ export async function syncShopifyOrders(
         { shopDomain, accessToken },
         ORDERS_QUERY,
         {
-          first: 100, // Reduced batch size for orders (more complex data)
+          first: 200, // Increased batch size for better performance (max 250 per Shopify API)
           after: currentCursor,
           query: graphqlQuery,
           sortKey: 'UPDATED_AT',
@@ -175,6 +176,34 @@ export async function syncShopifyOrders(
         successCount: result.successCount,
         errorCount: result.errorCount,
       });
+
+      // Sync this batch to internal tables immediately
+      logger.info(
+        { batchNumber, syncJobId },
+        'Syncing batch to internal orders and order_items tables'
+      );
+
+      try {
+        const internalSyncResult = await syncOrdersToInternal({
+          organizationId,
+          syncJobId,
+        });
+
+        logger.info(
+          {
+            batchNumber,
+            ordersProcessed: internalSyncResult.ordersProcessed,
+            orderItemsCreated: internalSyncResult.orderItemsCreated,
+          },
+          'Batch synced to internal tables'
+        );
+      } catch (error) {
+        logger.error(
+          { error, batchNumber, syncJobId },
+          'Failed to sync batch to internal tables (continuing with next batch)'
+        );
+        // Don't throw - continue with Shopify sync even if internal sync fails
+      }
 
       // Check if we should continue
       if (fetchAll) {

@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# Check if arguments are provided
+if [ $# -eq 0 ]; then
+    # No arguments - use the interactive script
+    exec ./scripts/commit.sh
+else
+    # Arguments provided - use them as commit message
+    COMMIT_MESSAGE="$*"
+
+    # Colors for output
+    GREEN='\033[0;32m'
+    BLUE='\033[0;34m'
+    NC='\033[0m' # No Color
+
+    echo -e "${BLUE}📝 [COMMIT]${NC} Starting quick commit..."
+
+    # Add all changes
+    git add -A
+
+    # Commit with the provided message
+    git commit -m "$COMMIT_MESSAGE"
+
+    # Push to remote
+    git push
+
+    echo -e "${GREEN}✅ [SUCCESS]${NC} Committed and pushed: $COMMIT_MESSAGE"
+fi
