@@ -122,28 +122,37 @@ export async function syncShopifyProductsToInternal(
       if (productsToUpsert.length > 0) {
         const productsJson = JSON.stringify(productsToUpsert);
 
-        await db.execute(sql`
-          INSERT INTO products (
-            organization_id, shopify_product_id, shopify_variant_ids, type, name, description,
-            sku, handle, price, requires_shipping, is_physical_product, is_taxable,
-            primary_image_url, image_urls, category, tags,
-            is_active, is_published, published_at, track_inventory, inventory_quantity, allow_backorder
-          )
-          SELECT *
-          FROM json_populate_recordset(NULL::products, ${sql.raw(`'${productsJson.replace(/'/g, "''")}'::jsonb`)})
-          ON CONFLICT (organization_id, shopify_product_id)
-          DO UPDATE SET
-            name = EXCLUDED.name,
-            description = EXCLUDED.description,
-            price = EXCLUDED.price,
-            primary_image_url = EXCLUDED.primary_image_url,
-            image_urls = EXCLUDED.image_urls,
-            tags = EXCLUDED.tags,
-            is_active = EXCLUDED.is_active,
-            is_published = EXCLUDED.is_published,
-            published_at = EXCLUDED.published_at,
-            updated_at = NOW()
-        `);
+        try {
+          await db.execute(sql`
+            INSERT INTO products (
+              organization_id, shopify_product_id, shopify_variant_ids, type, name, description,
+              sku, handle, price, requires_shipping, is_physical_product, is_taxable,
+              primary_image_url, image_urls, category, tags,
+              is_active, is_published, published_at, track_inventory, inventory_quantity, allow_backorder
+            )
+            SELECT *
+            FROM json_populate_recordset(NULL::products, ${sql.raw(`'${productsJson.replace(/'/g, "''")}'::jsonb`)})
+            ON CONFLICT (organization_id, shopify_product_id)
+            DO UPDATE SET
+              name = EXCLUDED.name,
+              description = EXCLUDED.description,
+              price = EXCLUDED.price,
+              primary_image_url = EXCLUDED.primary_image_url,
+              image_urls = EXCLUDED.image_urls,
+              tags = EXCLUDED.tags,
+              is_active = EXCLUDED.is_active,
+              is_published = EXCLUDED.is_published,
+              published_at = EXCLUDED.published_at,
+              updated_at = NOW()
+          `);
+        } catch (error) {
+          logger.error({
+            error,
+            sampleProduct: productsToUpsert[0],
+            jsonLength: productsJson.length
+          }, 'Failed to insert products');
+          throw error;
+        }
 
         result.productsCreated += productsToUpsert.length;
         logger.info({ batch: batchNumber, count: productsToUpsert.length }, 'Batch upserted products');
