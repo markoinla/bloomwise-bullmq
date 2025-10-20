@@ -171,9 +171,6 @@ export async function syncShopifyCustomers(
           });
 
         logger.info({ count: customersToUpsert.length }, 'Batch upserted Shopify customers');
-
-        // Sync to internal customers table
-        await syncToInternalCustomers(customersToUpsert, organizationId);
       }
 
       // Update progress
