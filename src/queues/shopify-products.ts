@@ -56,6 +56,7 @@ async function processShopifyProductsSync(job: Job<ShopifyProductsSyncJob>) {
       accessToken: integration.accessToken,
       fetchAll: type === 'full',
       updatedAfter: syncJob.config?.dateFrom,
+      job,
     });
 
     // 5. Mark sync job as completed

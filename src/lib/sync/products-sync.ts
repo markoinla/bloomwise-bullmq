@@ -7,6 +7,7 @@
  * 4. Updates syncJobs progress
  */
 
+import { Job } from 'bullmq';
 import { logger } from '../utils/logger';
 import { updateSyncJobProgress } from '../../db/queries';
 import { executeGraphQLQuery } from '../shopify/client';
@@ -23,6 +24,7 @@ interface ProductsSyncParams {
   accessToken: string;
   fetchAll?: boolean;
   updatedAfter?: string;
+  job?: Job;
 }
 
 interface ProductsSyncResult {
@@ -44,6 +46,7 @@ export async function syncShopifyProducts(
     accessToken,
     fetchAll = false,
     updatedAfter,
+    job,
   } = params;
 
   const result: ProductsSyncResult = {
@@ -60,6 +63,7 @@ export async function syncShopifyProducts(
       { organizationId, syncJobId, shopDomain, fetchAll },
       'Starting Shopify products sync'
     );
+    await job?.log(`🚀 Starting ${fetchAll ? 'full' : 'incremental'} products sync from ${shopDomain}`);
 
     // TODO: Implement actual GraphQL product fetching
     // This is a placeholder that shows the structure
@@ -83,6 +87,7 @@ export async function syncShopifyProducts(
         { batchNumber, cursor, syncJobId },
         'Fetching products batch from Shopify'
       );
+      await job?.log(`📦 Fetching batch ${batchNumber} from Shopify...`);
 
       // Fetch products from Shopify GraphQL API
       type ProductsResponse = {
@@ -167,6 +172,7 @@ export async function syncShopifyProducts(
           });
 
         logger.info({ count: productsToUpsert.length }, 'Batch upserted products');
+        await job?.log(`✅ Batch ${batchNumber}: Upserted ${productsToUpsert.length} products, ${variantsToUpsert.length} variants`);
       }
 
       // Batch upsert variants
@@ -226,6 +232,7 @@ export async function syncShopifyProducts(
         },
         'Batch processed and saved to database'
       );
+      await job?.log(`📊 Progress: ${result.processedItems} products processed${hasNextPage ? ' (more batches remaining)' : ''}`);
 
       // Sync to internal products/productVariants tables
       try {
@@ -286,6 +293,7 @@ export async function syncShopifyProducts(
       },
       'Shopify products sync completed'
     );
+    await job?.log(`🎉 Sync completed! Total: ${result.processedItems} products | Success: ${result.successCount} | Errors: ${result.errorCount}`);
 
     return result;
   } catch (error) {
