@@ -45,6 +45,15 @@ router.post('/sync/products', async (req: Request, res: Response) => {
       });
     }
 
+    // Debug logging
+    console.log('[PRODUCTS SYNC API]', {
+      origin: req.get('origin'),
+      referer: req.get('referer'),
+      host: req.get('host'),
+      detectedEnv: environment,
+      organizationId,
+    });
+
     logger.info({ organizationId, fetchAll, environment }, 'API: Enqueue products sync request');
 
     // Get environment-specific database connection
@@ -147,6 +156,15 @@ router.post('/sync/orders', async (req: Request, res: Response) => {
         error: 'Missing required field: organizationId',
       });
     }
+
+    // Debug logging
+    console.log('[ORDERS SYNC API]', {
+      origin: req.get('origin'),
+      referer: req.get('referer'),
+      host: req.get('host'),
+      detectedEnv: environment,
+      organizationId,
+    });
 
     logger.info({ organizationId, fetchAll, environment }, 'API: Enqueue orders sync request');
 
@@ -289,6 +307,15 @@ router.post('/sync/customers', async (req: Request, res: Response) => {
         error: 'Missing required field: organizationId',
       });
     }
+
+    // Debug logging
+    console.log('[CUSTOMERS SYNC API]', {
+      origin: req.get('origin'),
+      referer: req.get('referer'),
+      host: req.get('host'),
+      detectedEnv: environment,
+      organizationId,
+    });
 
     logger.info({ organizationId, fetchAll, environment }, 'API: Enqueue customers sync request');
 
