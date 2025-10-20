@@ -367,6 +367,64 @@ router.post('/sync/customers', async (req: Request, res: Response) => {
 });
 
 /**
+ * DELETE /api/sync/job/:jobId
+ * Cancel/remove a running job
+ */
+router.delete('/sync/job/:jobId', async (req: Request, res: Response) => {
+  try {
+    const { jobId } = req.params;
+    const { queue } = req.query;
+
+    if (!queue) {
+      return res.status(400).json({
+        error: 'Missing required query parameter: queue',
+      });
+    }
+
+    logger.info({ jobId, queue }, 'API: Remove job request');
+
+    // Get the appropriate queue
+    const queueInstance = queue === 'shopify-customers'
+      ? shopifyCustomersQueue
+      : queue === 'shopify-orders'
+      ? shopifyOrdersQueue
+      : queue === 'shopify-products'
+      ? shopifyProductsQueue
+      : null;
+
+    if (!queueInstance) {
+      return res.status(400).json({
+        error: 'Invalid queue name',
+      });
+    }
+
+    // Get the job and remove it
+    const job = await queueInstance.getJob(jobId);
+    if (!job) {
+      return res.status(404).json({
+        error: 'Job not found',
+      });
+    }
+
+    await job.remove();
+
+    logger.info({ jobId, queue }, 'API: Job removed successfully');
+
+    return res.status(200).json({
+      success: true,
+      message: 'Job removed successfully',
+      jobId,
+    });
+  } catch (error) {
+    logger.error({ error }, 'API: Failed to remove job');
+    return res.status(500).json({
+      error: 'Failed to remove job',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
  * POST /api/webhook/shopify/order
  * Process a single Shopify order webhook event
  */
