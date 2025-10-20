@@ -1,0 +1,316 @@
+/**
+ * Extract and insert notes from Shopify orders
+ *
+ * This handles:
+ * - Order-level notes from `order.note` field
+ * - Note attributes from `order.note_attributes`
+ * - Line item properties that should be surfaced as notes
+ */
+
+import { getDatabaseForEnvironment } from '../../config/database';
+import { notes, orderItems } from '../../db/schema';
+import { eq } from 'drizzle-orm';
+import { logger } from '../utils/logger';
+
+interface OrderWithShopifyData {
+  internalOrderId: string;
+  shopifyOrder: any;
+  shopifyCreatedAt: Date;
+}
+
+interface ExtractNotesOptions {
+  organizationId: string;
+  orders: OrderWithShopifyData[];
+  environment?: 'staging' | 'production';
+}
+
+export async function extractAndInsertOrderNotes(options: ExtractNotesOptions): Promise<{
+  success: boolean;
+  notesCreated: number;
+  errors: string[];
+}> {
+  const { organizationId, orders, environment = 'production' } = options;
+  const db = getDatabaseForEnvironment(environment);
+
+  const result = {
+    success: true,
+    notesCreated: 0,
+    errors: [] as string[],
+  };
+
+  if (orders.length === 0) {
+    return result;
+  }
+
+  try {
+    const notesToInsert: any[] = [];
+
+    for (const { internalOrderId, shopifyOrder, shopifyCreatedAt } of orders) {
+      const rawData = shopifyOrder.rawData as any;
+
+      // 1. Extract order-level note (internal notes)
+      if (shopifyOrder.note) {
+        notesToInsert.push({
+          organizationId,
+          entityType: 'order',
+          entityId: internalOrderId,
+          noteType: 'internal',
+          noteSource: 'shopify',
+          title: 'Order Notes',
+          content: shopifyOrder.note,
+          visibility: 'internal',
+          priority: 0,
+          createdAt: shopifyCreatedAt,
+          updatedAt: new Date(),
+        });
+      }
+
+      // 2. Extract note attributes (custom attributes)
+      // These can be in multiple formats depending on GraphQL vs REST
+      const noteAttributes = rawData?.note_attributes ||
+                             rawData?.noteAttributes ||
+                             rawData?.customAttributes ||
+                             [];
+
+      if (noteAttributes && Array.isArray(noteAttributes)) {
+        for (const attr of noteAttributes) {
+          const attrName = attr.name || attr.key;
+          const attrValue = attr.value;
+
+          if (!attrName || !attrValue) continue;
+
+          // Categorize the note based on attribute name
+          const { noteType, title, visibility } = categorizeNoteAttribute(attrName);
+
+          notesToInsert.push({
+            organizationId,
+            entityType: 'order',
+            entityId: internalOrderId,
+            noteType,
+            noteSource: 'shopify',
+            title,
+            content: attrValue,
+            visibility,
+            priority: noteType === 'gift_note' ? 10 : 5,
+            shopifyAttributeName: attrName,
+            metadata: {
+              originalAttributeName: attrName,
+              shopifyOrderId: shopifyOrder.shopifyOrderId,
+            },
+            createdAt: shopifyCreatedAt,
+            updatedAt: new Date(),
+          });
+        }
+      }
+
+      // 3. Extract line item properties as notes
+      // Need to fetch order items to link notes to them
+      const lineItems = rawData?.lineItems?.edges || rawData?.line_items || [];
+
+      if (lineItems.length > 0) {
+        // Fetch order items for this order
+        const orderItemsForOrder = await db
+          .select()
+          .from(orderItems)
+          .where(eq(orderItems.orderId, internalOrderId));
+
+        // Process line items and their properties
+        lineItems.forEach((lineItemData: any, lineIndex: number) => {
+          // Handle both GraphQL (edge.node) and REST (direct) formats
+          const lineItem = lineItemData.node || lineItemData;
+          const properties = lineItem.properties || lineItem.customAttributes || [];
+
+          if (!properties || !Array.isArray(properties) || properties.length === 0) {
+            return;
+          }
+
+          // Try to match line item to order item by index
+          const orderItem = orderItemsForOrder[lineIndex];
+          if (!orderItem) {
+            logger.warn(
+              { lineIndex, orderId: internalOrderId },
+              'Could not find order item for line item'
+            );
+            return;
+          }
+
+          // Extract notes from properties
+          for (const prop of properties) {
+            const propName = prop.name || prop.key;
+            const propValue = prop.value;
+
+            if (!propName || !propValue) continue;
+
+            // Skip internal/system properties
+            if (propName.startsWith('_')) continue;
+
+            // Skip Zapiet properties (already in structured fields)
+            if (propName.toLowerCase().includes('zapiet')) continue;
+
+            const { noteType, title, visibility, entityType } = categorizeLineItemProperty(
+              propName,
+              lineItem.name || orderItem.name
+            );
+
+            notesToInsert.push({
+              organizationId,
+              entityType: entityType || 'orderItem',
+              entityId: entityType === 'order' ? internalOrderId : orderItem.id,
+              noteType,
+              noteSource: 'shopify',
+              title,
+              content: propValue,
+              visibility,
+              priority: noteType === 'gift_note' || noteType === 'handwritten_card' ? 10 : 5,
+              shopifyLineItemId: lineItem.id,
+              metadata: {
+                lineItemName: lineItem.name || orderItem.name,
+                originalPropertyName: propName,
+                shopifyOrderId: shopifyOrder.shopifyOrderId,
+                shopifyLineItemId: lineItem.id,
+              },
+              createdAt: shopifyCreatedAt,
+              updatedAt: new Date(),
+            });
+          }
+        });
+      }
+    }
+
+    // Batch insert all notes
+    if (notesToInsert.length > 0) {
+      await db.insert(notes).values(notesToInsert);
+      result.notesCreated = notesToInsert.length;
+
+      logger.info(
+        { count: notesToInsert.length, organizationId },
+        'Batch inserted notes from Shopify orders'
+      );
+    }
+
+    return result;
+  } catch (error) {
+    logger.error({ error, organizationId }, 'Failed to extract and insert order notes');
+    result.success = false;
+    result.errors.push(error instanceof Error ? error.message : 'Unknown error');
+    return result;
+  }
+}
+
+/**
+ * Categorize a note attribute to determine note type, title, and visibility
+ */
+function categorizeNoteAttribute(attrName: string): {
+  noteType: string;
+  title: string;
+  visibility: 'internal' | 'customer' | 'public';
+} {
+  const lowerName = attrName.toLowerCase();
+
+  if (lowerName.includes('gift') && lowerName.includes('note')) {
+    return {
+      noteType: 'gift_note',
+      title: 'Gift Note',
+      visibility: 'customer',
+    };
+  }
+
+  if (lowerName.includes('card') || lowerName.includes('message')) {
+    return {
+      noteType: 'handwritten_card',
+      title: 'Card Message',
+      visibility: 'customer',
+    };
+  }
+
+  if (lowerName.includes('delivery') && lowerName.includes('instruction')) {
+    return {
+      noteType: 'delivery_instruction',
+      title: 'Delivery Instructions',
+      visibility: 'internal',
+    };
+  }
+
+  if (lowerName.includes('special') || lowerName.includes('instruction')) {
+    return {
+      noteType: 'order_note',
+      title: 'Special Instructions',
+      visibility: 'internal',
+    };
+  }
+
+  // Default: custom attribute
+  return {
+    noteType: 'custom_attribute',
+    title: attrName,
+    visibility: 'internal',
+  };
+}
+
+/**
+ * Categorize a line item property to determine note type, title, visibility, and entity
+ */
+function categorizeLineItemProperty(
+  propName: string,
+  lineItemName: string
+): {
+  noteType: string;
+  title: string;
+  visibility: 'internal' | 'customer' | 'public';
+  entityType?: 'order' | 'orderItem';
+} {
+  const lowerName = propName.toLowerCase();
+
+  if (lowerName.includes('gift') && (lowerName.includes('note') || lowerName.includes('message'))) {
+    return {
+      noteType: 'gift_note',
+      title: `Gift Note - ${lineItemName}`,
+      visibility: 'customer',
+      entityType: 'orderItem',
+    };
+  }
+
+  if (lowerName.includes('card')) {
+    return {
+      noteType: 'handwritten_card',
+      title: `Card Message - ${lineItemName}`,
+      visibility: 'customer',
+      entityType: 'orderItem',
+    };
+  }
+
+  if (lowerName.includes('handwritten') && lowerName.includes('card')) {
+    return {
+      noteType: 'handwritten_card',
+      title: 'Handwritten Card',
+      visibility: 'customer',
+      entityType: 'order', // Attach to order level
+    };
+  }
+
+  if (lowerName.includes('recipient')) {
+    return {
+      noteType: 'delivery_instruction',
+      title: 'Recipient',
+      visibility: 'internal',
+      entityType: 'order',
+    };
+  }
+
+  if (lowerName.includes('delivery') || lowerName.includes('instruction')) {
+    return {
+      noteType: 'delivery_instruction',
+      title: propName,
+      visibility: 'internal',
+      entityType: 'orderItem',
+    };
+  }
+
+  // Default: generic property
+  return {
+    noteType: 'order_note',
+    title: `${propName} - ${lineItemName}`,
+    visibility: 'internal',
+    entityType: 'orderItem',
+  };
+}

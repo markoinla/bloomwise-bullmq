@@ -6,6 +6,8 @@ import { getDatabaseForEnvironment } from '../../config/database';
 import { shopifyOrders, orders, orderItems } from '../../db/schema';
 import { eq, and, sql, inArray } from 'drizzle-orm';
 import { logger } from '../utils/logger';
+import { extractAndInsertOrderNotes } from './extract-order-notes';
+import { extractAndInsertOrderTags } from './extract-order-tags';
 
 interface OrderSyncOptions {
   organizationId: string;
@@ -141,6 +143,54 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
 
       result.ordersProcessed += createdOrders.length;
       logger.info({ count: createdOrders.length }, 'Batch created new orders');
+
+      // Extract and insert notes for newly created orders
+      const ordersForNoteExtraction = ordersToCreate
+        .map(shopifyOrder => ({
+          internalOrderId: createdOrdersMap.get(shopifyOrder.id)!,
+          shopifyOrder,
+          shopifyCreatedAt: shopifyOrder.shopifyCreatedAt,
+        }))
+        .filter(o => o.internalOrderId);
+
+      if (ordersForNoteExtraction.length > 0) {
+        const noteResult = await extractAndInsertOrderNotes({
+          organizationId,
+          orders: ordersForNoteExtraction,
+          environment,
+        });
+
+        if (!noteResult.success) {
+          logger.warn({ errors: noteResult.errors }, 'Failed to extract some notes');
+        } else {
+          logger.info({ count: noteResult.notesCreated }, 'Extracted notes for new orders');
+        }
+      }
+
+      // Extract and insert tags for newly created orders
+      const ordersForTagExtraction = ordersToCreate
+        .map(shopifyOrder => ({
+          internalOrderId: createdOrdersMap.get(shopifyOrder.id)!,
+          shopifyTags: shopifyOrder.tags,
+        }))
+        .filter(o => o.internalOrderId);
+
+      if (ordersForTagExtraction.length > 0) {
+        const tagResult = await extractAndInsertOrderTags({
+          organizationId,
+          orders: ordersForTagExtraction,
+          environment,
+        });
+
+        if (!tagResult.success) {
+          logger.warn({ errors: tagResult.errors }, 'Failed to extract some tags');
+        } else {
+          logger.info(
+            { created: tagResult.tagsCreated, linked: tagResult.tagsLinked },
+            'Extracted tags for new orders'
+          );
+        }
+      }
     }
 
     // For existing orders that need linking, just link them
@@ -176,6 +226,50 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
 
       result.ordersProcessed += linkedOrders.length;
       logger.info({ count: linkedOrders.length }, 'Updated already-linked orders with latest data');
+
+      // Extract and insert notes for updated orders (in case new notes were added)
+      const updatedOrdersForNoteExtraction = linkedOrders.map(shopifyOrder => ({
+        internalOrderId: shopifyOrder.internalOrderId!,
+        shopifyOrder,
+        shopifyCreatedAt: shopifyOrder.shopifyCreatedAt,
+      }));
+
+      if (updatedOrdersForNoteExtraction.length > 0) {
+        const noteResult = await extractAndInsertOrderNotes({
+          organizationId,
+          orders: updatedOrdersForNoteExtraction,
+          environment,
+        });
+
+        if (!noteResult.success) {
+          logger.warn({ errors: noteResult.errors }, 'Failed to extract notes for updated orders');
+        } else {
+          logger.info({ count: noteResult.notesCreated }, 'Extracted notes for updated orders');
+        }
+      }
+
+      // Extract and insert tags for updated orders
+      const updatedOrdersForTagExtraction = linkedOrders.map(shopifyOrder => ({
+        internalOrderId: shopifyOrder.internalOrderId!,
+        shopifyTags: shopifyOrder.tags,
+      }));
+
+      if (updatedOrdersForTagExtraction.length > 0) {
+        const tagResult = await extractAndInsertOrderTags({
+          organizationId,
+          orders: updatedOrdersForTagExtraction,
+          environment,
+        });
+
+        if (!tagResult.success) {
+          logger.warn({ errors: tagResult.errors }, 'Failed to extract tags for updated orders');
+        } else {
+          logger.info(
+            { created: tagResult.tagsCreated, linked: tagResult.tagsLinked },
+            'Extracted tags for updated orders'
+          );
+        }
+      }
     }
 
     // Batch create/update order items for newly linked orders

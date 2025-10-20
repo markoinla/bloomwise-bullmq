@@ -666,6 +666,96 @@ export const orderItems = pgTable("order_items", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+// ============================================
+// Notes Table (Polymorphic)
+// ============================================
+
+export const notes = pgTable("notes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull(),
+
+  // Polymorphic relation
+  entityType: text("entity_type").notNull(), // 'order', 'orderItem', 'event', 'customer', etc.
+  entityId: uuid("entity_id").notNull(),
+
+  // Note details
+  noteType: text("note_type").notNull(), // 'internal', 'gift_note', 'handwritten_card', 'delivery_instruction', 'custom_attribute', 'order_note'
+  noteSource: text("note_source").notNull().default("manual"), // 'manual', 'shopify', 'system'
+  title: text("title"),
+  content: text("content").notNull(),
+  metadata: jsonb("metadata"),
+
+  // Visibility and priority
+  visibility: text("visibility").notNull().default("internal"), // 'internal', 'customer', 'public'
+  priority: integer("priority").default(0),
+
+  // Shopify-specific fields (for notes from Shopify)
+  shopifyAttributeName: text("shopify_attribute_name"),
+  shopifyLineItemId: text("shopify_line_item_id"),
+
+  // Timestamps
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  createdBy: text("created_by"),
+
+  // Attachments
+  attachments: jsonb("attachments"),
+}, (table) => ({
+  entityIdx: index("notes_entity_idx").on(table.entityType, table.entityId),
+  organizationIdx: index("notes_organization_idx").on(table.organizationId),
+  typeIdx: index("notes_type_idx").on(table.noteType),
+  visibilityIdx: index("notes_visibility_idx").on(table.visibility),
+  createdAtIdx: index("notes_created_at_idx").on(table.createdAt),
+}));
+
+// ============================================
+// Tags Table
+// ============================================
+
+export const tags = pgTable("tags", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull(),
+
+  // Tag details
+  name: text("name").notNull(), // Lowercase, normalized name for lookup
+  displayName: text("display_name").notNull(), // Original case for display
+  description: text("description"),
+  color: text("color"),
+
+  // Usage tracking
+  usageCount: integer("usage_count").notNull().default(0),
+  isSystemTag: boolean("is_system_tag").notNull().default(false),
+
+  // Timestamps
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  organizationNameIdx: uniqueIndex("tags_organization_name_idx").on(table.organizationId, table.name),
+  usageCountIdx: index("tags_usage_count_idx").on(table.usageCount),
+}));
+
+// ============================================
+// Taggables Table (Polymorphic join table)
+// ============================================
+
+export const taggables = pgTable("taggables", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tagId: uuid("tag_id").notNull(),
+
+  // Polymorphic relation
+  taggableType: text("taggable_type").notNull(), // 'order', 'customer', 'product', 'recipe', etc.
+  taggableId: uuid("taggable_id").notNull(),
+
+  // Timestamps
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  createdBy: text("created_by"),
+}, (table) => ({
+  tagIdIdx: index("taggables_tag_id_idx").on(table.tagId),
+  typeIdIdx: index("taggables_type_id_idx").on(table.taggableType, table.taggableId),
+  typeIdx: index("taggables_type_idx").on(table.taggableType),
+  uniqueTaggable: uniqueIndex("taggables_type_id_tag_idx").on(table.taggableType, table.taggableId, table.tagId),
+}));
+
 // Type exports for use in job processors
 export type SyncJob = typeof syncJobs.$inferSelect;
 export type SyncJobInsert = typeof syncJobs.$inferInsert;
