@@ -21,20 +21,34 @@ declare global {
  * Checks Origin, Referer, and Host headers to determine if request is from staging or production
  */
 export function detectEnvironment(req: Request, _res: Response, next: NextFunction) {
-  const origin = req.get('origin') || req.get('referer') || req.get('host') || '';
+  const origin = req.get('origin') || '';
+  const referer = req.get('referer') || '';
+  const host = req.get('host') || '';
+
+  // Check all headers for staging
+  const headers = `${origin}|${referer}|${host}`;
 
   // Detect staging environment
-  if (origin.includes('staging.bloomwise.co')) {
+  if (headers.includes('staging.bloomwise.co')) {
     req.environment = 'staging';
   }
   // Detect production environment
-  else if (origin.includes('app.bloomwise.co') || origin.includes('bloomwise.co')) {
+  else if (headers.includes('app.bloomwise.co') || headers.includes('bloomwise.co')) {
     req.environment = 'production';
   }
   // Default to production for safety
   else {
     req.environment = 'production';
   }
+
+  // Log for debugging
+  console.log('[ENV DETECTION]', {
+    origin,
+    referer,
+    host,
+    detected: req.environment,
+    path: req.path,
+  });
 
   next();
 }
