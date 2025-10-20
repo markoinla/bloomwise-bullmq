@@ -27,7 +27,15 @@ export interface ProductWebhookData {
   environment?: 'staging' | 'production';
 }
 
-type WebhookData = OrderWebhookData | ProductWebhookData;
+export interface CustomerWebhookData {
+  shopifyCustomerId: string;
+  organizationId: string;
+  action: 'create' | 'update' | 'delete';
+  timestamp: string;
+  environment?: 'staging' | 'production';
+}
+
+type WebhookData = OrderWebhookData | ProductWebhookData | CustomerWebhookData;
 
 /**
  * Process an order webhook event
@@ -436,12 +444,48 @@ async function processProductWebhook(
 }
 
 /**
+ * Process a customer webhook event
+ * Fetches the customer from Shopify and syncs it to the database
+ */
+async function processCustomerWebhook(
+  job: Job<CustomerWebhookData>
+): Promise<void> {
+  const { shopifyCustomerId, organizationId, action } = job.data;
+  const jobLogger = createJobLogger(job.id!, organizationId);
+
+  jobLogger.info(
+    { shopifyCustomerId, action },
+    `Processing customer webhook: ${action}`
+  );
+
+  try {
+    // For now, just log the event (stub implementation)
+    jobLogger.info({ shopifyCustomerId, action }, `Customer webhook processed: ${action}`);
+
+    if (action === 'delete') {
+      // Handle customer deletion
+      jobLogger.info({ shopifyCustomerId }, 'Customer deleted - marking as inactive');
+      // TODO: Mark customer as deleted/inactive in database
+    } else {
+      // Handle create/update
+      jobLogger.info({ shopifyCustomerId }, 'Customer created/updated - sync needed');
+      // TODO: Fetch single customer from Shopify and upsert
+    }
+  } catch (error) {
+    jobLogger.error({ error, shopifyCustomerId }, 'Failed to process customer webhook');
+    throw error;
+  }
+}
+
+/**
  * Router function to determine which webhook handler to use
  */
 async function processWebhook(job: Job<WebhookData>): Promise<void> {
   // Determine webhook type based on job name or data
   if (job.name === 'process-product-webhook') {
     await processProductWebhook(job as Job<ProductWebhookData>);
+  } else if (job.name === 'process-customer-webhook') {
+    await processCustomerWebhook(job as Job<CustomerWebhookData>);
   } else {
     await processOrderWebhook(job as Job<OrderWebhookData>);
   }

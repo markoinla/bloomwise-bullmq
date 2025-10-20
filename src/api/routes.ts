@@ -554,4 +554,63 @@ router.post('/webhook/shopify/product', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * POST /api/webhook/shopify/customer
+ * Process a single Shopify customer webhook event
+ */
+router.post('/webhook/shopify/customer', async (req: Request, res: Response) => {
+  try {
+    const { shopifyCustomerId, organizationId, action } = req.body;
+    const environment = req.environment || 'production';
+
+    // Validate required fields
+    if (!shopifyCustomerId || !organizationId || !action) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: shopifyCustomerId, organizationId, action',
+      });
+    }
+
+    // Validate action
+    if (!['create', 'update', 'delete'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid action. Must be: create, update, or delete',
+      });
+    }
+
+    logger.info(
+      { shopifyCustomerId, organizationId, action, environment },
+      'API: Enqueue customer webhook job'
+    );
+
+    // Add job to queue
+    const job = await shopifyWebhooksQueue.add('process-customer-webhook', {
+      shopifyCustomerId,
+      organizationId,
+      action,
+      timestamp: new Date().toISOString(),
+      environment,
+    });
+
+    logger.info(
+      { jobId: job.id, shopifyCustomerId, organizationId, action },
+      'API: Customer webhook job enqueued'
+    );
+
+    return res.status(200).json({
+      success: true,
+      jobId: job.id,
+      message: `Webhook job enqueued for ${action} action`,
+    });
+  } catch (error) {
+    logger.error({ error }, 'API: Failed to enqueue customer webhook job');
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to enqueue customer webhook job',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
 export default router;
