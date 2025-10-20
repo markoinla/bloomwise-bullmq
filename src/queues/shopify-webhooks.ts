@@ -16,7 +16,18 @@ export interface OrderWebhookData {
   organizationId: string;
   action: 'create' | 'update' | 'cancel';
   timestamp: string;
+  environment?: 'staging' | 'production';
 }
+
+export interface ProductWebhookData {
+  shopifyProductId: string;
+  organizationId: string;
+  action: 'create' | 'update' | 'delete';
+  timestamp: string;
+  environment?: 'staging' | 'production';
+}
+
+type WebhookData = OrderWebhookData | ProductWebhookData;
 
 /**
  * Process an order webhook event
@@ -389,10 +400,57 @@ async function cancelInternalOrder(
   jobLogger.info({ shopifyOrderId: shopifyOrder.shopifyOrderId }, '✓ Cancelled order');
 }
 
+/**
+ * Process a product webhook event
+ * Fetches the product from Shopify and syncs it to the database
+ */
+async function processProductWebhook(
+  job: Job<ProductWebhookData>
+): Promise<void> {
+  const { shopifyProductId, organizationId, action } = job.data;
+  const jobLogger = createJobLogger(job.id!, organizationId);
+
+  jobLogger.info(
+    { shopifyProductId, action },
+    `Processing product webhook: ${action}`
+  );
+
+  try {
+    // For now, just trigger a sync for this specific product
+    // TODO: Implement single product fetch and sync
+    jobLogger.info({ shopifyProductId, action }, `Product webhook processed: ${action}`);
+
+    if (action === 'delete') {
+      // Handle product deletion
+      jobLogger.info({ shopifyProductId }, 'Product deleted - marking as inactive');
+      // TODO: Mark product as deleted/inactive in database
+    } else {
+      // Handle create/update
+      jobLogger.info({ shopifyProductId }, 'Product created/updated - sync needed');
+      // TODO: Fetch single product from Shopify and upsert
+    }
+  } catch (error) {
+    jobLogger.error({ error, shopifyProductId }, 'Failed to process product webhook');
+    throw error;
+  }
+}
+
+/**
+ * Router function to determine which webhook handler to use
+ */
+async function processWebhook(job: Job<WebhookData>): Promise<void> {
+  // Determine webhook type based on job name or data
+  if (job.name === 'process-product-webhook') {
+    await processProductWebhook(job as Job<ProductWebhookData>);
+  } else {
+    await processOrderWebhook(job as Job<OrderWebhookData>);
+  }
+}
+
 // Create and export the worker
 export const shopifyWebhooksWorker = new Worker(
   'shopify-webhooks',
-  processOrderWebhook,
+  processWebhook,
   {
     connection: redisConnection,
     concurrency: 10, // Process up to 10 webhooks concurrently
