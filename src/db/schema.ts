@@ -338,6 +338,93 @@ export const shopifyOrders = pgTable("shopify_orders", {
 }));
 
 // ============================================
+// Shopify Customers Table
+// ============================================
+
+export const shopifyCustomers = pgTable("shopify_customers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull(),
+
+  // Shopify identifiers
+  shopifyCustomerId: text("shopify_customer_id").notNull(),
+  shopifyIntegrationId: uuid("shopify_integration_id").notNull(),
+
+  // Customer info
+  email: text("email"),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  phone: text("phone"),
+  state: text("state"),
+
+  // Marketing preferences
+  verifiedEmail: boolean("verified_email").default(false),
+  acceptsMarketing: boolean("accepts_marketing").default(false),
+  marketingOptInLevel: text("marketing_opt_in_level"),
+  emailMarketingConsent: jsonb("email_marketing_consent"),
+  smsMarketingConsent: jsonb("sms_marketing_consent"),
+
+  // Address info
+  defaultAddressId: text("default_address_id"),
+  addresses: jsonb("addresses"),
+
+  // Stats
+  ordersCount: integer("orders_count").default(0),
+  totalSpent: text("total_spent"),
+  currency: text("currency"),
+
+  // Metadata
+  tags: text("tags"),
+  note: text("note"),
+  metafields: jsonb("metafields"),
+
+  // Shopify timestamps
+  shopifyCreatedAt: timestamp("shopify_created_at"),
+  shopifyUpdatedAt: timestamp("shopify_updated_at"),
+
+  // Internal mapping
+  internalCustomerId: uuid("internal_customer_id"),
+
+  // Sync metadata
+  lastSyncedAt: timestamp("last_synced_at"),
+
+  // Raw data from Shopify
+  rawJson: jsonb("raw_json").notNull(),
+
+  // System timestamps
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  orgIdIdx: index("shopify_customers_org_idx").on(table.organizationId),
+  emailIdx: index("shopify_customers_email_idx").on(table.email),
+  internalCustomerIdx: index("shopify_customers_internal_customer_idx").on(table.internalCustomerId),
+  uniqueShopifyCustomer: uniqueIndex("shopify_customers_org_shopify_customer_idx").on(table.organizationId, table.shopifyCustomerId),
+}));
+
+// ============================================
+// Internal Customers Table (existing, reference only)
+// ============================================
+
+export const customers = pgTable("customers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull(),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  email: text("email"),
+  phone: text("phone"),
+  shopifyCustomerId: text("shopify_customer_id"),
+  shopifyTags: text("shopify_tags"),
+  totalSpent: numeric("total_spent", { precision: 10, scale: 2 }),
+  ordersCount: integer("orders_count").default(0),
+  acceptsMarketing: boolean("accepts_marketing").default(false),
+  source: text("source"),
+  tags: text("tags").array(),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  // Note: Only including fields needed for customer sync. Full schema exists in main app.
+});
+
+// ============================================
 // Internal Products Tables
 // ============================================
 
@@ -593,3 +680,7 @@ export type Product = typeof products.$inferSelect;
 export type ProductInsert = typeof products.$inferInsert;
 export type ProductVariant = typeof productVariants.$inferSelect;
 export type ProductVariantInsert = typeof productVariants.$inferInsert;
+export type ShopifyCustomer = typeof shopifyCustomers.$inferSelect;
+export type ShopifyCustomerInsert = typeof shopifyCustomers.$inferInsert;
+export type Customer = typeof customers.$inferSelect;
+export type CustomerInsert = typeof customers.$inferInsert;

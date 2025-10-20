@@ -3,6 +3,8 @@ import { logger } from './lib/utils/logger';
 import { startDashboard } from './dashboard';
 import { shopifyProductsWorker } from './queues/shopify-products';
 import { shopifyOrdersWorker } from './queues/shopify-orders';
+import { shopifyWebhooksWorker } from './queues/shopify-webhooks';
+import { shopifyCustomersWorker } from './queues/shopify-customers';
 
 async function main() {
   logger.info('Starting Bloomwise BullMQ Worker Service...');
@@ -26,6 +28,8 @@ async function main() {
   logger.info('Workers initialized:');
   logger.info('  - shopify-products (listening)');
   logger.info('  - shopify-orders (listening)');
+  logger.info('  - shopify-customers (listening)');
+  logger.info('  - shopify-webhooks (listening)');
   logger.info('Worker service is ready to process jobs');
 
   // Graceful shutdown
@@ -35,6 +39,8 @@ async function main() {
     await Promise.all([
       shopifyProductsWorker.close(),
       shopifyOrdersWorker.close(),
+      shopifyCustomersWorker.close(),
+      shopifyWebhooksWorker.close(),
     ]);
     logger.info('Workers closed');
 

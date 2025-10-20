@@ -834,3 +834,100 @@ export interface OrdersQueryVariables {
   sortKey?: 'CREATED_AT' | 'ID' | 'ORDER_NUMBER' | 'PROCESSED_AT' | 'TOTAL_PRICE' | 'UPDATED_AT';
   reverse?: boolean;
 }
+
+// Customers Query - replaces /admin/api/2024-10/customers.json
+export const CUSTOMERS_QUERY = `
+  query getCustomers($first: Int!, $after: String, $query: String, $sortKey: CustomerSortKeys, $reverse: Boolean) {
+    customers(first: $first, after: $after, query: $query, sortKey: $sortKey, reverse: $reverse) {
+      edges {
+        cursor
+        node {
+          id
+          legacyResourceId
+          firstName
+          lastName
+          email
+          phone
+          state
+          verifiedEmail
+          acceptsMarketing
+          marketingOptInLevel
+
+          # Email marketing consent
+          emailMarketingConsent {
+            consentUpdatedAt
+            marketingOptInLevel
+            marketingState
+          }
+
+          # SMS marketing consent
+          smsMarketingConsent {
+            consentCollectedFrom
+            consentUpdatedAt
+            marketingOptInLevel
+            marketingState
+          }
+
+          # Default address
+          defaultAddress {
+            id
+            address1
+            address2
+            city
+            province
+            country
+            zip
+            phone
+            firstName
+            lastName
+            company
+          }
+
+          # All addresses
+          addresses(first: 10) {
+            id
+            address1
+            address2
+            city
+            province
+            country
+            zip
+            phone
+            firstName
+            lastName
+            company
+          }
+
+          # Stats
+          ordersCount
+          amountSpent {
+            amount
+            currencyCode
+          }
+
+          # Metadata
+          tags
+          note
+
+          # Timestamps
+          createdAt
+          updatedAt
+        }
+      }
+      pageInfo {
+        hasNextPage
+        hasPreviousPage
+        startCursor
+        endCursor
+      }
+    }
+  }
+`;
+
+export interface CustomersQueryVariables {
+  first: number;
+  after?: string;
+  query?: string;
+  sortKey?: 'CREATED_AT' | 'ID' | 'NAME' | 'ORDERS_COUNT' | 'TOTAL_SPENT' | 'UPDATED_AT';
+  reverse?: boolean;
+}

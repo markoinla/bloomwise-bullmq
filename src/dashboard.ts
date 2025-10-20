@@ -19,7 +19,9 @@ createBullBoard({
   queues: [
     new BullMQAdapter(queues['shopify-products']) as any,
     new BullMQAdapter(queues['shopify-orders']) as any,
+    new BullMQAdapter(queues['shopify-customers']) as any,
     new BullMQAdapter(queues['seal-subscriptions']) as any,
+    new BullMQAdapter(queues['shopify-webhooks']) as any,
   ],
   serverAdapter,
 });

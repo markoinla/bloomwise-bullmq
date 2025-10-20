@@ -22,6 +22,14 @@ const shopifyOrdersQueue = new Queue('shopify-orders', {
   connection: redisConnection,
 });
 
+const shopifyWebhooksQueue = new Queue('shopify-webhooks', {
+  connection: redisConnection,
+});
+
+const shopifyCustomersQueue = new Queue('shopify-customers', {
+  connection: redisConnection,
+});
+
 /**
  * POST /api/sync/products
  * Enqueue a Shopify products sync job
@@ -255,6 +263,161 @@ router.get('/sync/status/:syncJobId', async (req: Request, res: Response) => {
     logger.error({ error }, 'API: Failed to get sync status');
     return res.status(500).json({
       error: 'Failed to get sync status',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * POST /api/sync/customers
+ * Enqueue a Shopify customers sync job
+ */
+router.post('/sync/customers', async (req: Request, res: Response) => {
+  try {
+    const { organizationId, integrationId, fetchAll = false } = req.body;
+
+    if (!organizationId) {
+      return res.status(400).json({
+        error: 'Missing required field: organizationId',
+      });
+    }
+
+    logger.info({ organizationId, fetchAll }, 'API: Enqueue customers sync request');
+
+    // Find Shopify integration
+    let integration;
+    if (integrationId) {
+      [integration] = await db
+        .select()
+        .from(shopifyIntegrations)
+        .where(eq(shopifyIntegrations.id, integrationId))
+        .limit(1);
+    } else {
+      [integration] = await db
+        .select()
+        .from(shopifyIntegrations)
+        .where(
+          and(
+            eq(shopifyIntegrations.organizationId, organizationId),
+            eq(shopifyIntegrations.isActive, true)
+          )
+        )
+        .limit(1);
+    }
+
+    if (!integration) {
+      return res.status(404).json({
+        error: 'No active Shopify integration found for this organization',
+      });
+    }
+
+    // Create sync job record
+    const syncJobId = createId();
+    const now = new Date();
+
+    await db.insert(syncJobs).values({
+      id: syncJobId,
+      organizationId,
+      type: 'shopify_customers',
+      status: 'pending',
+      config: {
+        fetchAll,
+        source: 'api',
+      },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // Enqueue to BullMQ
+    const job = await shopifyCustomersQueue.add('sync-customers', {
+      syncJobId,
+      organizationId,
+      integrationId: integration.id,
+      fetchAll,
+    });
+
+    logger.info(
+      {
+        jobId: job.id,
+        syncJobId,
+        organizationId,
+        integrationId: integration.id,
+      },
+      'API: Customers sync job enqueued'
+    );
+
+    return res.status(200).json({
+      success: true,
+      jobId: job.id,
+      syncJobId,
+      organizationId,
+      integrationId: integration.id,
+      shopDomain: integration.shopDomain,
+      type: fetchAll ? 'full' : 'incremental',
+      message: 'Sync job enqueued successfully',
+      dashboardUrl: `https://jobs.bloomwise.co`,
+    });
+  } catch (error) {
+    logger.error({ error }, 'API: Failed to enqueue customers sync');
+    return res.status(500).json({
+      error: 'Failed to enqueue sync job',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * POST /api/webhook/shopify/order
+ * Process a single Shopify order webhook event
+ */
+router.post('/webhook/shopify/order', async (req: Request, res: Response) => {
+  try {
+    const { shopifyOrderId, organizationId, action } = req.body;
+
+    // Validate required fields
+    if (!shopifyOrderId || !organizationId || !action) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: shopifyOrderId, organizationId, action',
+      });
+    }
+
+    // Validate action
+    if (!['create', 'update', 'cancel'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid action. Must be: create, update, or cancel',
+      });
+    }
+
+    logger.info(
+      { shopifyOrderId, organizationId, action },
+      'API: Enqueue order webhook job'
+    );
+
+    // Add job to queue
+    const job = await shopifyWebhooksQueue.add('process-order-webhook', {
+      shopifyOrderId,
+      organizationId,
+      action,
+      timestamp: new Date().toISOString(),
+    });
+
+    logger.info(
+      { jobId: job.id, shopifyOrderId, organizationId, action },
+      'API: Order webhook job enqueued'
+    );
+
+    return res.status(200).json({
+      success: true,
+      jobId: job.id,
+      message: `Webhook job enqueued for ${action} action`,
+    });
+  } catch (error) {
+    logger.error({ error }, 'API: Failed to enqueue webhook job');
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to enqueue webhook job',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }
