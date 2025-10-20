@@ -196,9 +196,17 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
 function transformShopifyOrderToInternal(shopifyOrder: any) {
   const rawData = shopifyOrder.rawData as any;
 
-  // Determine fulfillment type
+  // Determine fulfillment type from pickup_location or tags
   let fulfillmentType = 'shipping';
-  if (shopifyOrder.pickupDate || shopifyOrder.pickupLocation) {
+  const pickupLocationStr = shopifyOrder.pickupLocation || '';
+
+  if (pickupLocationStr.startsWith('LOCAL_DELIVERY:')) {
+    fulfillmentType = 'delivery';
+  } else if (shopifyOrder.pickupLocation && !pickupLocationStr.startsWith('LOCAL_DELIVERY:')) {
+    fulfillmentType = 'pickup';
+  } else if (shopifyOrder.tags && shopifyOrder.tags.toLowerCase().includes('local delivery')) {
+    fulfillmentType = 'delivery';
+  } else if (shopifyOrder.tags && shopifyOrder.tags.toLowerCase().includes('pickup')) {
     fulfillmentType = 'pickup';
   }
 

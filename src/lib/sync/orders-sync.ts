@@ -259,6 +259,51 @@ function transformGraphQLOrder(order: ShopifyOrder, organizationId: string) {
     ? `${order.customer.firstName || ''} ${order.customer.lastName || ''}`.trim() || null
     : null;
 
+  // Parse Zapiet data from line items custom attributes
+  let zapietData: { method?: string; date?: string; location?: string } = {};
+  const lineItems = order.lineItems?.edges || [];
+  for (const edge of lineItems) {
+    const customAttrs = edge.node.customAttributes || [];
+    const zapietAttr = customAttrs.find((attr: any) => attr.key === '_ZapietId');
+    if (zapietAttr) {
+      // Parse format: "M=D&L=112097&D=2025-10-20T00:00:00Z"
+      const parts = zapietAttr.value.split('&');
+      for (const part of parts) {
+        const [key, value] = part.split('=');
+        if (key === 'M') zapietData.method = value; // D=delivery, P=pickup
+        if (key === 'D') zapietData.date = value;
+        if (key === 'L') zapietData.location = value;
+      }
+      break; // Use first Zapiet attribute found
+    }
+  }
+
+  // Determine delivery method from shipping lines or tags
+  const shippingLines = order.shippingLines?.edges || [];
+  const shippingLine = shippingLines[0]?.node;
+  const shippingCode = shippingLine?.code || '';
+  const shippingTitle = shippingLine?.title || '';
+  const tags = order.tags.join(',').toLowerCase();
+
+  let pickupDate: string | null = null;
+  let pickupLocation: string | null = null;
+
+  // Parse based on Zapiet method
+  if (zapietData.method === 'P') {
+    // Pickup
+    if (zapietData.date) {
+      pickupDate = zapietData.date.split('T')[0]; // Extract date portion (YYYY-MM-DD)
+    }
+    pickupLocation = shippingTitle || zapietData.location || null;
+  } else if (zapietData.method === 'D' || tags.includes('local delivery') || shippingCode.includes('local-delivery')) {
+    // Local delivery - store delivery date in pickup_date field
+    if (zapietData.date) {
+      pickupDate = zapietData.date.split('T')[0]; // Extract date portion (YYYY-MM-DD)
+    }
+    // Store delivery method indicator in pickup_location for now
+    pickupLocation = `LOCAL_DELIVERY: ${shippingTitle}`;
+  }
+
   return {
     organizationId,
     shopifyOrderId,
@@ -282,6 +327,8 @@ function transformGraphQLOrder(order: ShopifyOrder, organizationId: string) {
     tags: order.tags.join(','),
     note: order.note || null,
     test: false, // GraphQL doesn't expose test field
+    pickupDate,
+    pickupLocation,
     rawData: order,
     apiVersion: '2024-10', // Shopify API version
     syncedAt: new Date(),
