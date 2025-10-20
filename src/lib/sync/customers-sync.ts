@@ -8,6 +8,7 @@
  * 5. Updates syncJobs progress
  */
 
+import { Job } from 'bullmq';
 import { logger } from '../utils/logger';
 import { updateSyncJobProgress } from '../../db/queries';
 import { executeGraphQLQuery } from '../shopify/client';
@@ -25,6 +26,7 @@ interface CustomersSyncParams {
   integrationId: string;
   fetchAll?: boolean;
   updatedAfter?: string;
+  job?: Job;
 }
 
 export interface CustomersSyncResult {
@@ -47,6 +49,7 @@ export async function syncShopifyCustomers(
     integrationId,
     fetchAll = false,
     updatedAfter,
+    job,
   } = params;
 
   const result: CustomersSyncResult = {
@@ -63,6 +66,7 @@ export async function syncShopifyCustomers(
       { organizationId, syncJobId, shopDomain, fetchAll },
       'Starting Shopify customers sync'
     );
+    await job?.log(`🚀 Starting ${fetchAll ? 'full' : 'incremental'} customer sync from ${shopDomain}`);
 
     // 1. Build GraphQL query filter
     let graphqlQuery = '';
@@ -83,6 +87,7 @@ export async function syncShopifyCustomers(
         { batchNumber, cursor, syncJobId },
         'Fetching customers batch from Shopify'
       );
+      await job?.log(`📦 Fetching batch ${batchNumber} from Shopify...`);
 
       // Fetch customers from Shopify GraphQL API
       type CustomersResponse = {
@@ -171,6 +176,7 @@ export async function syncShopifyCustomers(
           });
 
         logger.info({ count: customersToUpsert.length }, 'Batch upserted Shopify customers');
+        await job?.log(`✅ Batch ${batchNumber}: Upserted ${customersToUpsert.length} customers to database`);
       }
 
       // Update progress
@@ -197,6 +203,7 @@ export async function syncShopifyCustomers(
         },
         'Completed customers batch'
       );
+      await job?.log(`📊 Progress: ${result.processedItems} customers processed${hasNextPage ? ' (more batches remaining)' : ''}`);
 
       // Rate limiting: 250ms delay between batches
       if (hasNextPage) {
@@ -213,6 +220,7 @@ export async function syncShopifyCustomers(
       },
       'Shopify customers sync completed'
     );
+    await job?.log(`🎉 Sync completed! Total: ${result.totalItems} customers | Success: ${result.successCount} | Errors: ${result.errorCount}`);
 
     return result;
   } catch (error) {

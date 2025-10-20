@@ -74,6 +74,7 @@ async function processShopifyCustomersSync(job: Job<ShopifyCustomersJobData>) {
       integrationId,
       fetchAll,
       updatedAfter: fetchAll ? undefined : integration.lastOrderSyncAt?.toISOString(),
+      job,
     });
 
     // 5. Mark job as completed
