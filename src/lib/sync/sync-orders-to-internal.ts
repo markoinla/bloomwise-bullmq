@@ -278,12 +278,19 @@ function transformShopifyOrderToInternal(shopifyOrder: any) {
     fulfillmentType = 'shipping';
   }
   // If order has shipping lines, check if it's delivery or shipping
-  else if (rawData.shippingLines && rawData.shippingLines.length > 0) {
-    const shippingTitle = rawData.shippingLines[0].title?.toLowerCase() || '';
-    if (shippingTitle.includes('local') || shippingTitle.includes('delivery')) {
-      fulfillmentType = 'delivery';
-    } else if (shippingTitle) {
-      fulfillmentType = 'shipping';
+  else if (rawData.shippingLines) {
+    // Handle both GraphQL format (edges) and REST format (array)
+    const shippingLines = rawData.shippingLines.edges
+      ? rawData.shippingLines.edges.map((e: any) => e.node)
+      : rawData.shippingLines;
+
+    if (shippingLines && shippingLines.length > 0) {
+      const shippingTitle = (shippingLines[0].title || '').toLowerCase();
+      if (shippingTitle.includes('local') || shippingTitle.includes('delivery')) {
+        fulfillmentType = 'delivery';
+      } else if (shippingTitle) {
+        fulfillmentType = 'shipping';
+      }
     }
   }
 
