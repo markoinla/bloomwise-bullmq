@@ -34,11 +34,10 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
   };
 
   try {
-    // Fetch Shopify orders for this organization that don't have an internal_order_id yet
+    // Fetch Shopify orders for this organization
     // Optionally limit to specific shopify_order IDs (for batch processing)
     const conditions = [
       eq(shopifyOrders.organizationId, organizationId),
-      sql`${shopifyOrders.internalOrderId} IS NULL`,
     ];
 
     // If specific shopify_order IDs provided, only sync those
@@ -53,38 +52,51 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
 
     logger.info(
       { count: shopifyOrdersToSync.length },
-      'Found Shopify orders without internal order'
+      'Found Shopify orders to sync'
     );
 
     if (shopifyOrdersToSync.length === 0) {
       return result;
     }
 
-    // Get all existing orders with shopify_order_id for this org (for matching)
-    const shopifyOrderIdsToCheck = shopifyOrdersToSync.map(o => o.shopifyOrderId);
-    const existingOrders = await db
-      .select()
-      .from(orders)
-      .where(
-        and(
-          eq(orders.organizationId, organizationId),
-          sql`${orders.shopifyOrderId} = ANY(ARRAY[${sql.join(shopifyOrderIdsToCheck.map(id => sql`${id}`), sql`, `)}])`
-        )
-      );
+    // Separate orders into those already linked vs not linked
+    const unlinkedOrders = shopifyOrdersToSync.filter(o => !o.internalOrderId);
+    const linkedOrders = shopifyOrdersToSync.filter(o => o.internalOrderId);
 
-    const existingOrdersMap = new Map(
-      existingOrders.map(o => [o.shopifyOrderId, o])
+    logger.info(
+      { unlinked: unlinkedOrders.length, linked: linkedOrders.length },
+      'Orders breakdown: linked vs unlinked'
     );
 
-    // Separate into new orders and updates
+    // Get all existing orders with shopify_order_id for this org (for matching unlinked orders)
+    const unlinkedShopifyOrderIds = unlinkedOrders.map(o => o.shopifyOrderId);
+    let existingOrdersMap = new Map();
+
+    if (unlinkedShopifyOrderIds.length > 0) {
+      const existingOrders = await db
+        .select()
+        .from(orders)
+        .where(
+          and(
+            eq(orders.organizationId, organizationId),
+            sql`${orders.shopifyOrderId} = ANY(ARRAY[${sql.join(unlinkedShopifyOrderIds.map(id => sql`${id}`), sql`, `)}])`
+          )
+        );
+
+      existingOrdersMap = new Map(
+        existingOrders.map(o => [o.shopifyOrderId, o])
+      );
+    }
+
+    // Separate into new orders and updates (for UNLINKED orders)
     const ordersToCreate: any[] = [];
-    const ordersToUpdate: Array<{ shopifyOrder: any; existingOrder: any }> = [];
+    const ordersToLinkExisting: Array<{ shopifyOrder: any; existingOrder: any }> = [];
     const shopifyOrdersToLink: Array<{ shopifyOrderId: string; internalOrderId: string }> = [];
 
-    for (const shopifyOrder of shopifyOrdersToSync) {
+    for (const shopifyOrder of unlinkedOrders) {
       const existingOrder = existingOrdersMap.get(shopifyOrder.shopifyOrderId);
       if (existingOrder) {
-        ordersToUpdate.push({ shopifyOrder, existingOrder });
+        ordersToLinkExisting.push({ shopifyOrder, existingOrder });
         shopifyOrdersToLink.push({
           shopifyOrderId: shopifyOrder.id,
           internalOrderId: existingOrder.id,
@@ -95,7 +107,7 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
     }
 
     logger.info(
-      { toCreate: ordersToCreate.length, toUpdate: ordersToUpdate.length },
+      { toCreate: ordersToCreate.length, toLink: ordersToLinkExisting.length, toUpdate: linkedOrders.length },
       'Batch processing orders'
     );
 
@@ -129,14 +141,42 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
       logger.info({ count: createdOrders.length }, 'Batch created new orders');
     }
 
-    // For existing orders, we just need to link them (no need to update fields)
-    // The orders were already created correctly, we're just establishing the relationship
-    if (ordersToUpdate.length > 0) {
-      result.ordersProcessed += ordersToUpdate.length;
-      logger.info({ count: ordersToUpdate.length }, 'Found existing orders to link');
+    // For existing orders that need linking, just link them
+    if (ordersToLinkExisting.length > 0) {
+      result.ordersProcessed += ordersToLinkExisting.length;
+      logger.info({ count: ordersToLinkExisting.length }, 'Found existing orders to link');
     }
 
-    // Batch create order items for all orders
+    // For already-linked orders, update key fields (fulfillment type, due date, etc.)
+    if (linkedOrders.length > 0) {
+      for (const shopifyOrder of linkedOrders) {
+        const internalOrderData = transformShopifyOrderToInternal(shopifyOrder);
+
+        await db
+          .update(orders)
+          .set({
+            fulfillmentType: internalOrderData.fulfillmentType,
+            dueDate: internalOrderData.dueDate,
+            dueTime: internalOrderData.dueTime,
+            deliveryAddress: internalOrderData.deliveryAddress,
+            status: internalOrderData.status,
+            paymentStatus: internalOrderData.paymentStatus,
+            shopifyFinancialStatus: internalOrderData.shopifyFinancialStatus,
+            shopifyFulfillmentStatus: internalOrderData.shopifyFulfillmentStatus,
+            shopifyTags: internalOrderData.shopifyTags,
+            completedAt: internalOrderData.completedAt,
+            cancelledAt: internalOrderData.cancelledAt,
+            cancellationReason: internalOrderData.cancellationReason,
+            updatedAt: new Date(),
+          })
+          .where(eq(orders.id, shopifyOrder.internalOrderId!));
+      }
+
+      result.ordersProcessed += linkedOrders.length;
+      logger.info({ count: linkedOrders.length }, 'Updated already-linked orders with latest data');
+    }
+
+    // Batch create/update order items for newly linked orders
     const allOrderItems: any[] = [];
     for (const { shopifyOrderId, internalOrderId } of shopifyOrdersToLink) {
       const shopifyOrder = shopifyOrdersToSync.find(o => o.id === shopifyOrderId);
@@ -156,7 +196,30 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
       // Batch insert all items
       await db.insert(orderItems).values(allOrderItems);
       result.orderItemsCreated += allOrderItems.length;
-      logger.info({ count: allOrderItems.length }, 'Batch created order items');
+      logger.info({ count: allOrderItems.length }, 'Batch created order items for newly linked orders');
+    }
+
+    // Update order items for already-linked orders (re-sync items in case they changed)
+    if (linkedOrders.length > 0) {
+      const linkedOrderIds = linkedOrders.map(o => o.internalOrderId!);
+      const linkedOrderItems: any[] = [];
+
+      for (const shopifyOrder of linkedOrders) {
+        const items = transformOrderItems(shopifyOrder, shopifyOrder.internalOrderId!);
+        linkedOrderItems.push(...items);
+      }
+
+      if (linkedOrderItems.length > 0) {
+        // Delete existing items
+        await db
+          .delete(orderItems)
+          .where(inArray(orderItems.orderId, linkedOrderIds));
+
+        // Insert updated items
+        await db.insert(orderItems).values(linkedOrderItems);
+        result.orderItemsCreated += linkedOrderItems.length;
+        logger.info({ count: linkedOrderItems.length }, 'Updated order items for already-linked orders');
+      }
     }
 
     // Batch update shopify_orders with internal_order_id using a single SQL statement
