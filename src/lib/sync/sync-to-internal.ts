@@ -3,7 +3,7 @@
  * Simplified batch version - just copies data with field name mapping
  */
 
-import { db } from '../../config/database';
+import { getDatabaseForEnvironment } from '../../config/database';
 import { shopifyProducts, shopifyVariants, products } from '../../db/schema';
 import { eq, and, inArray, sql } from 'drizzle-orm';
 import { logger } from '../utils/logger';
@@ -23,8 +23,10 @@ interface InternalSyncResult {
  */
 export async function syncShopifyProductsToInternal(
   organizationId: string,
-  shopifyProductIds: string[]
+  shopifyProductIds: string[],
+  environment: 'staging' | 'production' = 'production'
 ): Promise<InternalSyncResult> {
+  const db = getDatabaseForEnvironment(environment);
   const result: InternalSyncResult = {
     productsCreated: 0,
     productsUpdated: 0,

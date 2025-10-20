@@ -251,7 +251,7 @@ export async function syncShopifyProducts(
           return rawData.legacyResourceId?.toString() || p.id.split('/').pop()!;
         });
 
-        const internalSyncResult = await syncShopifyProductsToInternal(organizationId, productIds);
+        const internalSyncResult = await syncShopifyProductsToInternal(organizationId, productIds, environment);
 
         logger.info(
           {
