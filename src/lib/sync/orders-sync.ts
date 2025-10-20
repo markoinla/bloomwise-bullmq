@@ -155,6 +155,8 @@ export async function syncShopifyOrders(
               tags: sql`excluded.tags`,
               note: sql`excluded.note`,
               test: sql`excluded.test`,
+              pickupDate: sql`excluded.pickup_date`,
+              pickupLocation: sql`excluded.pickup_location`,
               rawData: sql`excluded.raw_data`,
               apiVersion: sql`excluded.api_version`,
               syncedAt: sql`excluded.synced_at`,
