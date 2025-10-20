@@ -229,123 +229,146 @@ export async function syncShopifyCustomers(
 }
 
 /**
- * Sync Shopify customers to internal customers table
+ * Sync Shopify customers to internal customers table - BATCH OPTIMIZED
  * Find existing customers by shopify_customer_id or email, create if not found
  */
 async function syncToInternalCustomers(
   shopifyCustomersData: any[],
   organizationId: string
 ): Promise<void> {
-  logger.info({ count: shopifyCustomersData.length }, 'Syncing to internal customers table');
+  logger.info({ count: shopifyCustomersData.length }, 'Syncing to internal customers table (batch mode)');
+
+  if (shopifyCustomersData.length === 0) return;
+
+  // Step 1: Batch fetch all existing customers by Shopify ID
+  const shopifyIds = shopifyCustomersData
+    .map(c => c.shopifyCustomerId)
+    .filter(Boolean);
+
+  const existingByShopifyId = await db
+    .select()
+    .from(customers)
+    .where(
+      and(
+        eq(customers.organizationId, organizationId),
+        sql`${customers.shopifyCustomerId} = ANY(${sql.raw(`ARRAY[${shopifyIds.map(id => `'${id}'`).join(',')}]`)})`
+      )
+    );
+
+  const existingByShopifyIdMap = new Map(
+    existingByShopifyId.map(c => [c.shopifyCustomerId, c])
+  );
+
+  // Step 2: For customers not found by Shopify ID, batch fetch by email
+  const notFoundByShopifyId = shopifyCustomersData.filter(
+    sc => !existingByShopifyIdMap.has(sc.shopifyCustomerId)
+  );
+
+  const emails = notFoundByShopifyId
+    .map(c => c.email)
+    .filter(Boolean);
+
+  let existingByEmailMap = new Map();
+  if (emails.length > 0) {
+    const existingByEmail = await db
+      .select()
+      .from(customers)
+      .where(
+        and(
+          eq(customers.organizationId, organizationId),
+          sql`${customers.email} = ANY(${sql.raw(`ARRAY[${emails.map(e => `'${e.replace(/'/g, "''")}'`).join(',')}]`)})`
+        )
+      );
+
+    existingByEmailMap = new Map(
+      existingByEmail.map(c => [c.email, c])
+    );
+  }
+
+  // Step 3: Categorize customers into update vs create
+  const customersToUpdate: Array<{ shopifyData: any; existing: any }> = [];
+  const customersToCreate: any[] = [];
 
   for (const shopifyCustomer of shopifyCustomersData) {
-    try {
-      const shopifyCustomerId = shopifyCustomer.shopifyCustomerId;
-      const email = shopifyCustomer.email;
+    const existingById = existingByShopifyIdMap.get(shopifyCustomer.shopifyCustomerId);
+    const existingByEmail = existingByEmailMap.get(shopifyCustomer.email);
+    const existing = existingById || existingByEmail;
 
-      // Find existing customer by shopify_customer_id or email
-      let existingCustomer: any = null;
-
-      if (shopifyCustomerId) {
-        [existingCustomer] = await db
-          .select()
-          .from(customers)
-          .where(
-            and(
-              eq(customers.organizationId, organizationId),
-              eq(customers.shopifyCustomerId, shopifyCustomerId)
-            )
-          )
-          .limit(1);
-      }
-
-      // If not found by Shopify ID, try finding by email
-      if (!existingCustomer && email) {
-        [existingCustomer] = await db
-          .select()
-          .from(customers)
-          .where(
-            and(
-              eq(customers.organizationId, organizationId),
-              eq(customers.email, email)
-            )
-          )
-          .limit(1);
-      }
-
-      if (existingCustomer) {
-        // Update existing customer
-        await db
-          .update(customers)
-          .set({
-            shopifyCustomerId,
-            firstName: shopifyCustomer.firstName || existingCustomer.firstName,
-            lastName: shopifyCustomer.lastName || existingCustomer.lastName,
-            email: email || existingCustomer.email,
-            phone: shopifyCustomer.phone || existingCustomer.phone,
-            acceptsMarketing: shopifyCustomer.acceptsMarketing,
-            shopifyTags: shopifyCustomer.tags,
-            totalSpent: shopifyCustomer.totalSpent ? parseFloat(shopifyCustomer.totalSpent) : existingCustomer.totalSpent,
-            ordersCount: shopifyCustomer.ordersCount || existingCustomer.ordersCount,
-            updatedAt: new Date(),
-          })
-          .where(eq(customers.id, existingCustomer.id));
-
-        // Link back to shopify_customers table
-        await db
-          .update(shopifyCustomers)
-          .set({ internalCustomerId: existingCustomer.id })
-          .where(
-            and(
-              eq(shopifyCustomers.organizationId, organizationId),
-              eq(shopifyCustomers.shopifyCustomerId, shopifyCustomerId)
-            )
-          );
-
-        logger.debug({ customerId: existingCustomer.id }, 'Updated existing customer');
-      } else {
-        // Create new customer
-        const totalSpentValue = shopifyCustomer.totalSpent ? shopifyCustomer.totalSpent : undefined;
-
-        const [newCustomer] = await db
-          .insert(customers)
-          .values({
-            organizationId,
-            shopifyCustomerId,
-            firstName: shopifyCustomer.firstName || null,
-            lastName: shopifyCustomer.lastName || null,
-            email: email || null,
-            phone: shopifyCustomer.phone || null,
-            acceptsMarketing: shopifyCustomer.acceptsMarketing || false,
-            shopifyTags: shopifyCustomer.tags || null,
-            totalSpent: totalSpentValue,
-            source: 'shopify',
-          })
-          .returning();
-
-        // Link back to shopify_customers table
-        await db
-          .update(shopifyCustomers)
-          .set({ internalCustomerId: newCustomer.id })
-          .where(
-            and(
-              eq(shopifyCustomers.organizationId, organizationId),
-              eq(shopifyCustomers.shopifyCustomerId, shopifyCustomerId)
-            )
-          );
-
-        logger.debug({ customerId: newCustomer.id }, 'Created new customer');
-      }
-    } catch (error) {
-      logger.error(
-        {
-          error,
-          shopifyCustomerId: shopifyCustomer.shopifyCustomerId,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        },
-        'Failed to sync customer to internal table'
-      );
+    if (existing) {
+      customersToUpdate.push({ shopifyData: shopifyCustomer, existing });
+    } else {
+      customersToCreate.push(shopifyCustomer);
     }
+  }
+
+  logger.info({ toUpdate: customersToUpdate.length, toCreate: customersToCreate.length }, 'Batch sync breakdown');
+
+  // Step 4: Batch create new customers
+  if (customersToCreate.length > 0) {
+    const newCustomers = await db
+      .insert(customers)
+      .values(
+        customersToCreate.map(sc => ({
+          organizationId,
+          shopifyCustomerId: sc.shopifyCustomerId,
+          firstName: sc.firstName || null,
+          lastName: sc.lastName || null,
+          email: sc.email || null,
+          phone: sc.phone || null,
+          acceptsMarketing: sc.acceptsMarketing || false,
+          shopifyTags: sc.tags || null,
+          totalSpent: sc.totalSpent ? sc.totalSpent : undefined,
+          source: 'shopify',
+        }))
+      )
+      .returning();
+
+    // Batch update links for new customers
+    for (let i = 0; i < newCustomers.length; i++) {
+      await db
+        .update(shopifyCustomers)
+        .set({ internalCustomerId: newCustomers[i].id })
+        .where(
+          and(
+            eq(shopifyCustomers.organizationId, organizationId),
+            eq(shopifyCustomers.shopifyCustomerId, customersToCreate[i].shopifyCustomerId)
+          )
+        );
+    }
+
+    logger.info({ count: newCustomers.length }, 'Created new customers');
+  }
+
+  // Step 5: Batch update existing customers
+  if (customersToUpdate.length > 0) {
+    for (const { shopifyData: sc, existing } of customersToUpdate) {
+      await db
+        .update(customers)
+        .set({
+          shopifyCustomerId: sc.shopifyCustomerId,
+          firstName: sc.firstName || existing.firstName,
+          lastName: sc.lastName || existing.lastName,
+          email: sc.email || existing.email,
+          phone: sc.phone || existing.phone,
+          acceptsMarketing: sc.acceptsMarketing,
+          shopifyTags: sc.tags,
+          totalSpent: sc.totalSpent ? sc.totalSpent : existing.totalSpent,
+          updatedAt: new Date(),
+        })
+        .where(eq(customers.id, existing.id));
+
+      await db
+        .update(shopifyCustomers)
+        .set({ internalCustomerId: existing.id })
+        .where(
+          and(
+            eq(shopifyCustomers.organizationId, organizationId),
+            eq(shopifyCustomers.shopifyCustomerId, sc.shopifyCustomerId)
+          )
+        );
+    }
+
+    logger.info({ count: customersToUpdate.length }, 'Updated existing customers');
   }
 
   logger.info('Completed syncing to internal customers table');
