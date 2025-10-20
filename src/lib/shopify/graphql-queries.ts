@@ -929,3 +929,141 @@ export interface CustomersQueryVariables {
   sortKey?: 'CREATED_AT' | 'ID' | 'NAME' | 'ORDERS_COUNT' | 'TOTAL_SPENT' | 'UPDATED_AT';
   reverse?: boolean;
 }
+
+// Single Product Query - for webhook processing
+export const PRODUCT_BY_ID_QUERY = `
+  query getProduct($id: ID!) {
+    product(id: $id) {
+      id
+      legacyResourceId
+      title
+      description
+      handle
+      productType
+      vendor
+      tags
+      status
+      createdAt
+      updatedAt
+      publishedAt
+      totalInventory
+      tracksInventory
+
+      images(first: 10) {
+        edges {
+          node {
+            id
+            url
+            altText
+            width
+            height
+          }
+        }
+      }
+
+      variants(first: 100) {
+        edges {
+          node {
+            id
+            legacyResourceId
+            title
+            sku
+            barcode
+            price
+            compareAtPrice
+            position
+            inventoryQuantity
+            inventoryPolicy
+            fulfillmentService
+            inventoryManagement
+            taxable
+            weight
+            weightUnit
+            createdAt
+            updatedAt
+
+            selectedOptions {
+              name
+              value
+            }
+
+            image {
+              url
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+// Single Customer Query - for webhook processing
+export const CUSTOMER_BY_ID_QUERY = `
+  query getCustomer($id: ID!) {
+    customer(id: $id) {
+      id
+      legacyResourceId
+      firstName
+      lastName
+      email
+      phone
+      verifiedEmail
+      state
+      createdAt
+      updatedAt
+      note
+      tags
+
+      numberOfOrders
+
+      emailMarketingConsent {
+        marketingState
+        marketingOptInLevel
+        consentUpdatedAt
+      }
+
+      smsMarketingConsent {
+        marketingState
+        marketingOptInLevel
+        consentUpdatedAt
+      }
+
+      defaultAddress {
+        id
+        address1
+        address2
+        city
+        province
+        provinceCode
+        country
+        countryCode
+        zip
+        phone
+        company
+      }
+
+      addresses(first: 10) {
+        edges {
+          node {
+            id
+            address1
+            address2
+            city
+            province
+            provinceCode
+            country
+            countryCode
+            zip
+            phone
+            company
+          }
+        }
+      }
+
+      amountSpent {
+        amount
+        currencyCode
+      }
+    }
+  }
+`;

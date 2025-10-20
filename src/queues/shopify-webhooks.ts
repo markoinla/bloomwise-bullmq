@@ -7,9 +7,14 @@
 import { Worker, Job } from 'bullmq';
 import { redisConnection } from '../config/redis';
 import { logger, createJobLogger } from '../lib/utils/logger';
-import { db } from '../config/database';
-import { shopifyOrders, orders } from '../db/schema';
+import { getDatabaseForEnvironment } from '../config/database';
+import { shopifyOrders, orders, shopifyProducts, shopifyVariants, shopifyCustomers, shopifyIntegrations } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
+import { executeGraphQLQuery } from '../lib/shopify/client';
+import { PRODUCT_BY_ID_QUERY, CUSTOMER_BY_ID_QUERY } from '../lib/shopify/graphql-queries';
+import { transformProductToDbRecords } from '../lib/sync/transform-product';
+import { transformCustomerToDbRecord } from '../lib/sync/transform-customer';
+import { sql } from 'drizzle-orm';
 
 export interface OrderWebhookData {
   shopifyOrderId: string;
@@ -45,8 +50,9 @@ type WebhookData = OrderWebhookData | ProductWebhookData | CustomerWebhookData;
 async function processOrderWebhook(
   job: Job<OrderWebhookData>
 ): Promise<void> {
-  const { shopifyOrderId, organizationId, action } = job.data;
+  const { shopifyOrderId, organizationId, action, environment = 'production' } = job.data;
   const jobLogger = createJobLogger(job.id!, organizationId);
+  const db = getDatabaseForEnvironment(environment);
 
   jobLogger.info(
     { shopifyOrderId, action },
@@ -75,15 +81,15 @@ async function processOrderWebhook(
     // 2. Handle based on action
     switch (action) {
       case 'create':
-        await createInternalOrder(shopifyOrder, organizationId, jobLogger);
+        await createInternalOrder(shopifyOrder, organizationId, jobLogger, db);
         break;
 
       case 'update':
-        await updateInternalOrder(shopifyOrder, organizationId, jobLogger);
+        await updateInternalOrder(shopifyOrder, organizationId, jobLogger, db);
         break;
 
       case 'cancel':
-        await cancelInternalOrder(shopifyOrder, organizationId, jobLogger);
+        await cancelInternalOrder(shopifyOrder, organizationId, jobLogger, db);
         break;
     }
 
@@ -107,7 +113,8 @@ async function processOrderWebhook(
 async function createInternalOrder(
   shopifyOrder: any,
   organizationId: string,
-  jobLogger: any
+  jobLogger: any,
+  db: any
 ): Promise<void> {
   const rawData = shopifyOrder.rawData as any;
 
@@ -357,7 +364,8 @@ function mapPaymentStatus(financialStatus: string): string {
 async function updateInternalOrder(
   shopifyOrder: any,
   organizationId: string,
-  jobLogger: any
+  jobLogger: any,
+  db: any
 ): Promise<void> {
   // Find the internal order
   const [internalOrder] = await db
@@ -369,7 +377,7 @@ async function updateInternalOrder(
   if (!internalOrder) {
     // Order doesn't exist yet, create it
     jobLogger.info('Internal order not found, creating new order');
-    await createInternalOrder(shopifyOrder, organizationId, jobLogger);
+    await createInternalOrder(shopifyOrder, organizationId, jobLogger, db);
     return;
   }
 
@@ -395,7 +403,8 @@ async function updateInternalOrder(
 async function cancelInternalOrder(
   shopifyOrder: any,
   _organizationId: string,
-  jobLogger: any
+  jobLogger: any,
+  db: any
 ): Promise<void> {
   await db
     .update(orders)
@@ -415,8 +424,9 @@ async function cancelInternalOrder(
 async function processProductWebhook(
   job: Job<ProductWebhookData>
 ): Promise<void> {
-  const { shopifyProductId, organizationId, action } = job.data;
+  const { shopifyProductId, organizationId, action, environment = 'production' } = job.data;
   const jobLogger = createJobLogger(job.id!, organizationId);
+  const db = getDatabaseForEnvironment(environment);
 
   jobLogger.info(
     { shopifyProductId, action },
@@ -424,18 +434,140 @@ async function processProductWebhook(
   );
 
   try {
-    // For now, just trigger a sync for this specific product
-    // TODO: Implement single product fetch and sync
-    jobLogger.info({ shopifyProductId, action }, `Product webhook processed: ${action}`);
-
     if (action === 'delete') {
-      // Handle product deletion
+      // Mark product as inactive/deleted in database
       jobLogger.info({ shopifyProductId }, 'Product deleted - marking as inactive');
-      // TODO: Mark product as deleted/inactive in database
+
+      await db
+        .update(shopifyProducts)
+        .set({
+          isActive: false,
+          status: 'deleted',
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(shopifyProducts.shopifyProductId, shopifyProductId),
+            eq(shopifyProducts.organizationId, organizationId)
+          )
+        );
+
+      await db
+        .update(shopifyVariants)
+        .set({
+          isActive: false,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(shopifyVariants.shopifyProductId, shopifyProductId),
+            eq(shopifyVariants.organizationId, organizationId)
+          )
+        );
+
+      jobLogger.info({ shopifyProductId }, '✓ Product marked as deleted');
     } else {
-      // Handle create/update
-      jobLogger.info({ shopifyProductId }, 'Product created/updated - sync needed');
-      // TODO: Fetch single product from Shopify and upsert
+      // Fetch single product from Shopify and upsert
+      jobLogger.info({ shopifyProductId }, 'Fetching product from Shopify...');
+
+      // Get Shopify integration credentials
+      const [integration] = await db
+        .select()
+        .from(shopifyIntegrations)
+        .where(eq(shopifyIntegrations.organizationId, organizationId))
+        .limit(1);
+
+      if (!integration || !integration.accessToken) {
+        throw new Error(`No Shopify integration found for organization ${organizationId}`);
+      }
+
+      // Build GraphQL product ID
+      const graphqlId = `gid://shopify/Product/${shopifyProductId}`;
+
+      // Fetch product from Shopify
+      const response = await executeGraphQLQuery<{ product: any }>(
+        {
+          shopDomain: integration.shopDomain,
+          accessToken: integration.accessToken,
+        },
+        PRODUCT_BY_ID_QUERY,
+        { id: graphqlId }
+      );
+
+      if (response.errors) {
+        throw new Error(`GraphQL errors: ${response.errors.map(e => e.message).join(', ')}`);
+      }
+
+      if (!response.data?.product) {
+        throw new Error(`Product ${shopifyProductId} not found in Shopify`);
+      }
+
+      const product = response.data.product;
+
+      // Transform to database records
+      const { productRecord, variantRecords } = transformProductToDbRecords(product, organizationId);
+
+      // Upsert product
+      await db
+        .insert(shopifyProducts)
+        .values(productRecord)
+        .onConflictDoUpdate({
+          target: [shopifyProducts.organizationId, shopifyProducts.shopifyProductId],
+          set: {
+            title: sql`excluded.title`,
+            bodyHtml: sql`excluded.body_html`,
+            vendor: sql`excluded.vendor`,
+            productType: sql`excluded.product_type`,
+            handle: sql`excluded.handle`,
+            status: sql`excluded.status`,
+            publishedAt: sql`excluded.published_at`,
+            featuredImage: sql`excluded.featured_image`,
+            allImages: sql`excluded.all_images`,
+            tags: sql`excluded.tags`,
+            shopifyUpdatedAt: sql`excluded.shopify_updated_at`,
+            rawProductData: sql`excluded.raw_product_data`,
+            syncedAt: sql`excluded.synced_at`,
+            isActive: sql`excluded.is_active`,
+            updatedAt: new Date(),
+          },
+        });
+
+      // Upsert variants
+      if (variantRecords.length > 0) {
+        await db
+          .insert(shopifyVariants)
+          .values(variantRecords)
+          .onConflictDoUpdate({
+            target: [shopifyVariants.organizationId, shopifyVariants.shopifyVariantId],
+            set: {
+              title: sql`excluded.title`,
+              variantTitle: sql`excluded.variant_title`,
+              sku: sql`excluded.sku`,
+              barcode: sql`excluded.barcode`,
+              price: sql`excluded.price`,
+              compareAtPrice: sql`excluded.compare_at_price`,
+              inventoryQuantity: sql`excluded.inventory_quantity`,
+              inventoryPolicy: sql`excluded.inventory_policy`,
+              inventoryManagement: sql`excluded.inventory_management`,
+              weight: sql`excluded.weight`,
+              weightUnit: sql`excluded.weight_unit`,
+              grams: sql`excluded.grams`,
+              position: sql`excluded.position`,
+              imageSrc: sql`excluded.image_src`,
+              isActive: sql`excluded.is_active`,
+              availableForSale: sql`excluded.available_for_sale`,
+              shopifyUpdatedAt: sql`excluded.shopify_updated_at`,
+              rawData: sql`excluded.raw_data`,
+              syncedAt: sql`excluded.synced_at`,
+              updatedAt: new Date(),
+            },
+          });
+      }
+
+      jobLogger.info(
+        { shopifyProductId, variantCount: variantRecords.length },
+        '✓ Product and variants synced'
+      );
     }
   } catch (error) {
     jobLogger.error({ error, shopifyProductId }, 'Failed to process product webhook');
@@ -450,8 +582,9 @@ async function processProductWebhook(
 async function processCustomerWebhook(
   job: Job<CustomerWebhookData>
 ): Promise<void> {
-  const { shopifyCustomerId, organizationId, action } = job.data;
+  const { shopifyCustomerId, organizationId, action, environment = 'production' } = job.data;
   const jobLogger = createJobLogger(job.id!, organizationId);
+  const db = getDatabaseForEnvironment(environment);
 
   jobLogger.info(
     { shopifyCustomerId, action },
@@ -459,17 +592,97 @@ async function processCustomerWebhook(
   );
 
   try {
-    // For now, just log the event (stub implementation)
-    jobLogger.info({ shopifyCustomerId, action }, `Customer webhook processed: ${action}`);
-
     if (action === 'delete') {
-      // Handle customer deletion
+      // Mark customer as deleted in database
       jobLogger.info({ shopifyCustomerId }, 'Customer deleted - marking as inactive');
-      // TODO: Mark customer as deleted/inactive in database
+
+      await db
+        .update(shopifyCustomers)
+        .set({
+          state: 'deleted',
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(shopifyCustomers.shopifyCustomerId, shopifyCustomerId),
+            eq(shopifyCustomers.organizationId, organizationId)
+          )
+        );
+
+      jobLogger.info({ shopifyCustomerId }, '✓ Customer marked as deleted');
     } else {
-      // Handle create/update
-      jobLogger.info({ shopifyCustomerId }, 'Customer created/updated - sync needed');
-      // TODO: Fetch single customer from Shopify and upsert
+      // Fetch single customer from Shopify and upsert
+      jobLogger.info({ shopifyCustomerId }, 'Fetching customer from Shopify...');
+
+      // Get Shopify integration credentials
+      const [integration] = await db
+        .select()
+        .from(shopifyIntegrations)
+        .where(eq(shopifyIntegrations.organizationId, organizationId))
+        .limit(1);
+
+      if (!integration || !integration.accessToken) {
+        throw new Error(`No Shopify integration found for organization ${organizationId}`);
+      }
+
+      // Build GraphQL customer ID
+      const graphqlId = `gid://shopify/Customer/${shopifyCustomerId}`;
+
+      // Fetch customer from Shopify
+      const response = await executeGraphQLQuery<{ customer: any }>(
+        {
+          shopDomain: integration.shopDomain,
+          accessToken: integration.accessToken,
+        },
+        CUSTOMER_BY_ID_QUERY,
+        { id: graphqlId }
+      );
+
+      if (response.errors) {
+        throw new Error(`GraphQL errors: ${response.errors.map(e => e.message).join(', ')}`);
+      }
+
+      if (!response.data?.customer) {
+        throw new Error(`Customer ${shopifyCustomerId} not found in Shopify`);
+      }
+
+      const customer = response.data.customer;
+
+      // Transform to database record
+      const customerRecord = transformCustomerToDbRecord(customer, organizationId, integration.id);
+
+      // Upsert customer
+      await db
+        .insert(shopifyCustomers)
+        .values(customerRecord)
+        .onConflictDoUpdate({
+          target: [shopifyCustomers.organizationId, shopifyCustomers.shopifyCustomerId],
+          set: {
+            email: sql`excluded.email`,
+            firstName: sql`excluded.first_name`,
+            lastName: sql`excluded.last_name`,
+            phone: sql`excluded.phone`,
+            state: sql`excluded.state`,
+            verifiedEmail: sql`excluded.verified_email`,
+            acceptsMarketing: sql`excluded.accepts_marketing`,
+            marketingOptInLevel: sql`excluded.marketing_opt_in_level`,
+            emailMarketingConsent: sql`excluded.email_marketing_consent`,
+            smsMarketingConsent: sql`excluded.sms_marketing_consent`,
+            defaultAddressId: sql`excluded.default_address_id`,
+            addresses: sql`excluded.addresses`,
+            ordersCount: sql`excluded.orders_count`,
+            totalSpent: sql`excluded.total_spent`,
+            currency: sql`excluded.currency`,
+            tags: sql`excluded.tags`,
+            note: sql`excluded.note`,
+            shopifyUpdatedAt: sql`excluded.shopify_updated_at`,
+            rawJson: sql`excluded.raw_json`,
+            lastSyncedAt: sql`excluded.last_synced_at`,
+            updatedAt: new Date(),
+          },
+        });
+
+      jobLogger.info({ shopifyCustomerId }, '✓ Customer synced');
     }
   } catch (error) {
     jobLogger.error({ error, shopifyCustomerId }, 'Failed to process customer webhook');
