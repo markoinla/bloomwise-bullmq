@@ -234,8 +234,36 @@ function transformShopifyOrderToInternal(shopifyOrder: any) {
   const shippingAddress = rawData.shippingAddress || {};
   const billingAddress = rawData.billingAddress || {};
 
-  // Determine due date (default to pickup_date or 7 days from order date)
-  const dueDate = shopifyOrder.pickupDate || new Date(new Date(shopifyOrder.shopifyCreatedAt).getTime() + 7 * 24 * 60 * 60 * 1000);
+  // Determine due date from pickup_date (Zapiet) or try to parse from tags, or use order created date
+  let dueDate = shopifyOrder.shopifyCreatedAt;
+
+  if (shopifyOrder.pickupDate) {
+    // Use Zapiet-provided date (most reliable)
+    dueDate = new Date(shopifyOrder.pickupDate);
+  } else if (shopifyOrder.tags) {
+    // Try to parse date from tags like "10-20-2025" or "2025-10-20"
+    const tags = shopifyOrder.tags.split(',');
+    for (const tag of tags) {
+      const trimmedTag = tag.trim();
+      // Match MM-DD-YYYY or YYYY-MM-DD format
+      const dateMatch = trimmedTag.match(/^(\d{2})-(\d{2})-(\d{4})$/) || trimmedTag.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (dateMatch) {
+        try {
+          if (trimmedTag.match(/^\d{2}-\d{2}-\d{4}$/)) {
+            // MM-DD-YYYY format
+            const [_, month, day, year] = dateMatch;
+            dueDate = new Date(`${year}-${month}-${day}`);
+          } else {
+            // YYYY-MM-DD format
+            dueDate = new Date(trimmedTag);
+          }
+          break;
+        } catch (e) {
+          // Invalid date, continue searching
+        }
+      }
+    }
+  }
 
   return {
     organizationId: shopifyOrder.organizationId,
