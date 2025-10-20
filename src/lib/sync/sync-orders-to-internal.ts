@@ -2,7 +2,7 @@
  * Sync shopify_orders to internal orders + order_items tables
  */
 
-import { db } from '../../config/database';
+import { getDatabaseForEnvironment } from '../../config/database';
 import { shopifyOrders, orders, orderItems } from '../../db/schema';
 import { eq, and, sql, inArray } from 'drizzle-orm';
 import { logger } from '../utils/logger';
@@ -11,6 +11,7 @@ interface OrderSyncOptions {
   organizationId: string;
   syncJobId?: string;
   shopifyOrderIds?: string[]; // Limit sync to specific shopify_order IDs (for batch processing)
+  environment?: 'staging' | 'production';
 }
 
 export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
@@ -19,7 +20,8 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
   orderItemsCreated: number;
   errors: number;
 }> {
-  const { organizationId, syncJobId, shopifyOrderIds } = options;
+  const { organizationId, syncJobId, shopifyOrderIds, environment = 'production' } = options;
+  const db = getDatabaseForEnvironment(environment);
 
   logger.info(
     { organizationId, syncJobId, limitToIds: shopifyOrderIds?.length },

@@ -2,32 +2,38 @@ import { Worker, Job } from 'bullmq';
 import { redisConnection } from '../config/redis';
 import { ShopifyProductsSyncJob } from '../config/queues';
 import { logger, createJobLogger } from '../lib/utils/logger';
-import {
-  getShopifyIntegration,
-  getSyncJob,
-  markSyncJobRunning,
-  markSyncJobCompleted,
-  markSyncJobFailed,
-} from '../db/queries';
+import { getDatabaseForEnvironment } from '../config/database';
+import { shopifyIntegrations, syncJobs } from '../db/schema';
+import { eq } from 'drizzle-orm';
 
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '5');
 
 async function processShopifyProductsSync(job: Job<ShopifyProductsSyncJob>) {
-  const { syncJobId, organizationId, integrationId, type } = job.data;
+  const { syncJobId, organizationId, integrationId, type, environment = 'production' } = job.data;
   const jobLogger = createJobLogger(job.id!, organizationId);
+  const db = getDatabaseForEnvironment(environment);
 
-  jobLogger.info({ syncJobId, integrationId, type }, 'Starting Shopify products sync');
+  jobLogger.info({ syncJobId, integrationId, type, environment }, 'Starting Shopify products sync');
 
   try {
     // 1. Verify sync job exists
-    const syncJob = await getSyncJob(syncJobId);
+    const [syncJob] = await db
+      .select()
+      .from(syncJobs)
+      .where(eq(syncJobs.id, syncJobId))
+      .limit(1);
+
     if (!syncJob) {
       throw new Error(`Sync job ${syncJobId} not found in database`);
     }
 
     // 2. Fetch Shopify credentials
     jobLogger.info('Fetching Shopify credentials...');
-    const integration = await getShopifyIntegration(integrationId);
+    const [integration] = await db
+      .select()
+      .from(shopifyIntegrations)
+      .where(eq(shopifyIntegrations.id, integrationId))
+      .limit(1);
 
     if (!integration) {
       throw new Error(`Shopify integration ${integrationId} not found`);
@@ -38,7 +44,15 @@ async function processShopifyProductsSync(job: Job<ShopifyProductsSyncJob>) {
     }
 
     // 3. Mark sync job as running
-    await markSyncJobRunning(syncJobId);
+    await db
+      .update(syncJobs)
+      .set({
+        status: 'running',
+        startedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(syncJobs.id, syncJobId));
+
     await job.updateProgress(0);
 
     jobLogger.info(
@@ -57,10 +71,24 @@ async function processShopifyProductsSync(job: Job<ShopifyProductsSyncJob>) {
       fetchAll: type === 'full',
       updatedAfter: syncJob.config?.dateFrom,
       job,
+      environment,
     });
 
     // 5. Mark sync job as completed
-    await markSyncJobCompleted(syncJobId, result);
+    await db
+      .update(syncJobs)
+      .set({
+        status: 'completed',
+        completedAt: new Date(),
+        updatedAt: new Date(),
+        totalItems: result.totalItems,
+        processedItems: result.processedItems,
+        successCount: result.successCount,
+        errorCount: result.errorCount,
+        skipCount: result.skipCount,
+      })
+      .where(eq(syncJobs.id, syncJobId));
+
     await job.updateProgress(100);
 
     jobLogger.info({ syncJobId, result }, 'Shopify products sync completed successfully');
@@ -70,7 +98,16 @@ async function processShopifyProductsSync(job: Job<ShopifyProductsSyncJob>) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
     // Mark sync job as failed in database
-    await markSyncJobFailed(syncJobId, errorMessage, error);
+    await db
+      .update(syncJobs)
+      .set({
+        status: 'failed',
+        completedAt: new Date(),
+        updatedAt: new Date(),
+        errorMessage,
+        lastError: errorMessage,
+      })
+      .where(eq(syncJobs.id, syncJobId));
 
     jobLogger.error({ error, syncJobId }, 'Shopify products sync failed');
     throw error; // Let BullMQ handle retries

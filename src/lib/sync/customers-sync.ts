@@ -14,7 +14,7 @@ import { updateSyncJobProgress } from '../../db/queries';
 import { executeGraphQLQuery } from '../shopify/client';
 import { CUSTOMERS_QUERY } from '../shopify/graphql-queries';
 import { transformCustomerToDbRecord } from './transform-customer';
-import { db } from '../../config/database';
+import { getDatabaseForEnvironment } from '../../config/database';
 import { shopifyCustomers } from '../../db/schema';
 import { sql } from 'drizzle-orm';
 
@@ -27,6 +27,7 @@ interface CustomersSyncParams {
   fetchAll?: boolean;
   updatedAfter?: string;
   job?: Job;
+  environment?: 'staging' | 'production';
 }
 
 export interface CustomersSyncResult {
@@ -50,7 +51,10 @@ export async function syncShopifyCustomers(
     fetchAll = false,
     updatedAfter,
     job,
+    environment = 'production',
   } = params;
+
+  const db = getDatabaseForEnvironment(environment);
 
   const result: CustomersSyncResult = {
     success: true,

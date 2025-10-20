@@ -4,13 +4,12 @@
  * Fetches orders from Shopify and syncs to shopify_orders table
  */
 
-import { db } from '../../config/database';
-import { shopifyOrders } from '../../db/schema';
-import { sql } from 'drizzle-orm';
+import { getDatabaseForEnvironment } from '../../config/database';
+import { shopifyOrders, syncJobs } from '../../db/schema';
+import { sql, eq } from 'drizzle-orm';
 import { logger } from '../utils/logger';
 import { executeGraphQLQuery } from '../shopify/client';
 import { ORDERS_QUERY, type ShopifyOrder } from '../shopify/graphql-queries';
-import { updateSyncJobProgress } from '../../db/queries';
 import { syncOrdersToInternal } from './sync-orders-to-internal';
 
 export interface OrdersSyncOptions {
@@ -21,6 +20,7 @@ export interface OrdersSyncOptions {
   fetchAll?: boolean;
   cursor?: string;
   updatedAtMin?: Date;
+  environment?: 'staging' | 'production';
 }
 
 export interface OrdersSyncResult {
@@ -48,7 +48,10 @@ export async function syncShopifyOrders(
     fetchAll = false,
     cursor,
     updatedAtMin,
+    environment = 'production',
   } = options;
+
+  const db = getDatabaseForEnvironment(environment);
 
   const result: OrdersSyncResult = {
     success: true,
@@ -61,7 +64,7 @@ export async function syncShopifyOrders(
   };
 
   logger.info(
-    { organizationId, syncJobId, shopDomain, fetchAll },
+    { organizationId, syncJobId, shopDomain, fetchAll, environment },
     'Starting Shopify orders sync'
   );
 
@@ -172,12 +175,16 @@ export async function syncShopifyOrders(
       result.totalItems += orders.length;
 
       // Update sync job progress in database
-      await updateSyncJobProgress(syncJobId, {
-        processedItems: result.processedItems,
-        totalItems: result.totalItems,
-        successCount: result.successCount,
-        errorCount: result.errorCount,
-      });
+      await db
+        .update(syncJobs)
+        .set({
+          processedItems: result.processedItems,
+          totalItems: result.totalItems,
+          successCount: result.successCount,
+          errorCount: result.errorCount,
+          updatedAt: new Date(),
+        })
+        .where(eq(syncJobs.id, syncJobId));
 
       // Sync this batch to internal tables immediately
       logger.info(
@@ -193,6 +200,7 @@ export async function syncShopifyOrders(
           organizationId,
           syncJobId,
           shopifyOrderIds: batchShopifyOrderIds, // Only sync this batch's orders
+          environment,
         });
 
         logger.info(

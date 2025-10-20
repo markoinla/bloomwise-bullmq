@@ -13,7 +13,7 @@ import { updateSyncJobProgress } from '../../db/queries';
 import { executeGraphQLQuery } from '../shopify/client';
 import { PRODUCTS_QUERY } from '../shopify/graphql-queries';
 import { transformProductToDbRecords } from './transform-product.js';
-import { db } from '../../config/database';
+import { getDatabaseForEnvironment } from '../../config/database';
 import { shopifyProducts, shopifyVariants } from '../../db/schema';
 import { sql } from 'drizzle-orm';
 
@@ -25,6 +25,7 @@ interface ProductsSyncParams {
   fetchAll?: boolean;
   updatedAfter?: string;
   job?: Job;
+  environment?: 'staging' | 'production';
 }
 
 interface ProductsSyncResult {
@@ -47,7 +48,10 @@ export async function syncShopifyProducts(
     fetchAll = false,
     updatedAfter,
     job,
+    environment = 'production',
   } = params;
+
+  const db = getDatabaseForEnvironment(environment);
 
   const result: ProductsSyncResult = {
     success: true,

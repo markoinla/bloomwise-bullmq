@@ -8,15 +8,8 @@ import { Worker, Job } from 'bullmq';
 import { redisConnection } from '../config/redis';
 import { logger, createJobLogger } from '../lib/utils/logger';
 import { syncShopifyOrders } from '../lib/sync/orders-sync';
-import {
-  getShopifyIntegration,
-  getSyncJob,
-  markSyncJobRunning,
-  markSyncJobCompleted,
-  markSyncJobFailed,
-} from '../db/queries';
-import { db } from '../config/database';
-import { shopifyIntegrations } from '../db/schema';
+import { getDatabaseForEnvironment } from '../config/database';
+import { shopifyIntegrations, syncJobs } from '../db/schema';
 import { eq } from 'drizzle-orm';
 
 export interface ShopifyOrdersJobData {
@@ -24,23 +17,30 @@ export interface ShopifyOrdersJobData {
   integrationId: string;
   syncJobId: string;
   fetchAll?: boolean;
+  environment?: 'staging' | 'production';
 }
 
 /**
  * Process Shopify orders sync job
  */
 async function processShopifyOrdersSync(job: Job<ShopifyOrdersJobData>) {
-  const { organizationId, integrationId, syncJobId, fetchAll = false } = job.data;
+  const { organizationId, integrationId, syncJobId, fetchAll = false, environment = 'production' } = job.data;
   const jobLogger = createJobLogger(job.id!, organizationId);
+  const db = getDatabaseForEnvironment(environment);
 
   jobLogger.info(
-    { syncJobId, integrationId, fetchAll },
+    { syncJobId, integrationId, fetchAll, environment },
     'Starting Shopify orders sync'
   );
 
   try {
     // 1. Verify sync job exists
-    const syncJob = await getSyncJob(syncJobId);
+    const [syncJob] = await db
+      .select()
+      .from(syncJobs)
+      .where(eq(syncJobs.id, syncJobId))
+      .limit(1);
+
     if (!syncJob) {
       throw new Error(`Sync job ${syncJobId} not found`);
     }
@@ -48,13 +48,26 @@ async function processShopifyOrdersSync(job: Job<ShopifyOrdersJobData>) {
     // 2. Fetch Shopify credentials
     jobLogger.info('Fetching Shopify credentials...');
 
-    const integration = await getShopifyIntegration(integrationId);
+    const [integration] = await db
+      .select()
+      .from(shopifyIntegrations)
+      .where(eq(shopifyIntegrations.id, integrationId))
+      .limit(1);
+
     if (!integration || !integration.accessToken || integration.organizationId !== organizationId) {
       throw new Error('Active Shopify integration not found or missing credentials');
     }
 
     // 3. Mark job as running
-    await markSyncJobRunning(syncJobId);
+    await db
+      .update(syncJobs)
+      .set({
+        status: 'running',
+        startedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(syncJobs.id, syncJobId));
+
     jobLogger.info({ syncJobId, status: 'running' }, 'Updated sync job status');
 
     // 4. Execute orders sync
@@ -73,19 +86,26 @@ async function processShopifyOrdersSync(job: Job<ShopifyOrdersJobData>) {
       accessToken: integration.accessToken,
       fetchAll,
       updatedAtMin: fetchAll ? undefined : integration.lastOrderSyncAt || undefined,
+      environment,
     });
 
     // Note: Internal sync now happens incrementally during Shopify fetch (after each batch)
     // No need for a separate sync step at the end
 
     // 5. Mark job as completed
-    await markSyncJobCompleted(syncJobId, {
-      totalItems: syncResult.totalItems,
-      processedItems: syncResult.processedItems,
-      successCount: syncResult.successCount,
-      errorCount: syncResult.errorCount,
-      skipCount: syncResult.skipCount,
-    });
+    await db
+      .update(syncJobs)
+      .set({
+        status: 'completed',
+        completedAt: new Date(),
+        updatedAt: new Date(),
+        totalItems: syncResult.totalItems,
+        processedItems: syncResult.processedItems,
+        successCount: syncResult.successCount,
+        errorCount: syncResult.errorCount,
+        skipCount: syncResult.skipCount,
+      })
+      .where(eq(syncJobs.id, syncJobId));
 
     // 6. Update integration last sync timestamp
     await db
@@ -123,7 +143,16 @@ async function processShopifyOrdersSync(job: Job<ShopifyOrdersJobData>) {
     );
 
     // Mark sync job as failed
-    await markSyncJobFailed(syncJobId, errorMessage, error);
+    await db
+      .update(syncJobs)
+      .set({
+        status: 'failed',
+        completedAt: new Date(),
+        updatedAt: new Date(),
+        errorMessage,
+        lastError: errorMessage,
+      })
+      .where(eq(syncJobs.id, syncJobId));
 
     // Re-throw to let BullMQ handle retries
     throw error;
