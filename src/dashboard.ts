@@ -5,6 +5,7 @@ import { ExpressAdapter } from '@bull-board/express';
 import { queues } from './config/queues';
 import { logger } from './lib/utils/logger';
 import apiRoutes from './api/routes';
+import { detectEnvironment } from './middleware/environment';
 
 const PORT = parseInt(process.env.BULL_BOARD_PORT || '3001');
 const USERNAME = process.env.BULL_BOARD_USERNAME || 'admin';
@@ -52,6 +53,9 @@ app.use((req, res, next) => {
 
 // Parse JSON body
 app.use(express.json());
+
+// Environment detection middleware (applies to all routes)
+app.use(detectEnvironment);
 
 // Health check endpoint (no auth)
 app.get('/health', (_req, res) => {

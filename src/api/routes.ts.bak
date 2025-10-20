@@ -10,6 +10,7 @@ import { db, getDatabaseForEnvironment } from '../config/database';
 import { syncJobs, shopifyIntegrations } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 import { logger } from '../lib/utils/logger';
+import type { Environment } from '../middleware/environment';
 
 const router = express.Router();
 
@@ -89,6 +90,7 @@ router.post('/sync/products', async (req: Request, res: Response) => {
       config: {
         fetchAll,
         source: 'api',
+        environment,
       },
       createdAt: now,
       updatedAt: now,
@@ -140,7 +142,6 @@ router.post('/sync/products', async (req: Request, res: Response) => {
 router.post('/sync/orders', async (req: Request, res: Response) => {
   try {
     const { organizationId, integrationId, fetchAll = false } = req.body;
-    const environment = req.environment || 'production';
 
     if (!organizationId) {
       return res.status(400).json({
@@ -148,18 +149,18 @@ router.post('/sync/orders', async (req: Request, res: Response) => {
       });
     }
 
-    logger.info({ organizationId, fetchAll, environment }, 'API: Enqueue orders sync request');
+    logger.info({ organizationId, fetchAll }, 'API: Enqueue orders sync request');
 
     // Find Shopify integration
     let integration;
     if (integrationId) {
-      [integration] = await getDatabaseForEnvironment(environment)
+      [integration] = await db
         .select()
         .from(shopifyIntegrations)
         .where(eq(shopifyIntegrations.id, integrationId))
         .limit(1);
     } else {
-      [integration] = await getDatabaseForEnvironment(environment)
+      [integration] = await db
         .select()
         .from(shopifyIntegrations)
         .where(
@@ -181,7 +182,7 @@ router.post('/sync/orders', async (req: Request, res: Response) => {
     const syncJobId = createId();
     const now = new Date();
 
-    await getDatabaseForEnvironment(environment).insert(syncJobs).values({
+    await db.insert(syncJobs).values({
       id: syncJobId,
       organizationId,
       type: fetchAll ? 'shopify_orders_initial' : 'shopify_orders_incremental',
@@ -200,7 +201,6 @@ router.post('/sync/orders', async (req: Request, res: Response) => {
       organizationId,
       integrationId: integration.id,
       fetchAll,
-      environment,
     });
 
     logger.info(
@@ -282,7 +282,6 @@ router.get('/sync/status/:syncJobId', async (req: Request, res: Response) => {
 router.post('/sync/customers', async (req: Request, res: Response) => {
   try {
     const { organizationId, integrationId, fetchAll = false } = req.body;
-    const environment = req.environment || 'production';
 
     if (!organizationId) {
       return res.status(400).json({
@@ -290,21 +289,18 @@ router.post('/sync/customers', async (req: Request, res: Response) => {
       });
     }
 
-    logger.info({ organizationId, fetchAll, environment }, 'API: Enqueue customers sync request');
-
-    // Get environment-specific database connection
-    const envDb = getDatabaseForEnvironment(environment);
+    logger.info({ organizationId, fetchAll }, 'API: Enqueue customers sync request');
 
     // Find Shopify integration
     let integration;
     if (integrationId) {
-      [integration] = await envDb
+      [integration] = await db
         .select()
         .from(shopifyIntegrations)
         .where(eq(shopifyIntegrations.id, integrationId))
         .limit(1);
     } else {
-      [integration] = await envDb
+      [integration] = await db
         .select()
         .from(shopifyIntegrations)
         .where(
@@ -326,7 +322,7 @@ router.post('/sync/customers', async (req: Request, res: Response) => {
     const syncJobId = createId();
     const now = new Date();
 
-    await envDb.insert(syncJobs).values({
+    await db.insert(syncJobs).values({
       id: syncJobId,
       organizationId,
       type: 'shopify_customers',
@@ -345,7 +341,6 @@ router.post('/sync/customers', async (req: Request, res: Response) => {
       organizationId,
       integrationId: integration.id,
       fetchAll,
-      environment,
     });
 
     logger.info(
@@ -443,7 +438,6 @@ router.delete('/sync/job/:jobId', async (req: Request, res: Response) => {
 router.post('/webhook/shopify/order', async (req: Request, res: Response) => {
   try {
     const { shopifyOrderId, organizationId, action } = req.body;
-    const environment = req.environment || 'production';
 
     // Validate required fields
     if (!shopifyOrderId || !organizationId || !action) {
@@ -462,7 +456,7 @@ router.post('/webhook/shopify/order', async (req: Request, res: Response) => {
     }
 
     logger.info(
-      { shopifyOrderId, organizationId, action, environment },
+      { shopifyOrderId, organizationId, action },
       'API: Enqueue order webhook job'
     );
 
@@ -472,7 +466,6 @@ router.post('/webhook/shopify/order', async (req: Request, res: Response) => {
       organizationId,
       action,
       timestamp: new Date().toISOString(),
-      environment,
     });
 
     logger.info(

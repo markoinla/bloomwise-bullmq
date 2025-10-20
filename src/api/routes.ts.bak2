@@ -89,6 +89,7 @@ router.post('/sync/products', async (req: Request, res: Response) => {
       config: {
         fetchAll,
         source: 'api',
+        environment,
       },
       createdAt: now,
       updatedAt: now,
@@ -189,6 +190,7 @@ router.post('/sync/orders', async (req: Request, res: Response) => {
       config: {
         fetchAll,
         source: 'api',
+        environment,
       },
       createdAt: now,
       updatedAt: now,
@@ -334,6 +336,7 @@ router.post('/sync/customers', async (req: Request, res: Response) => {
       config: {
         fetchAll,
         source: 'api',
+        environment,
       },
       createdAt: now,
       updatedAt: now,
