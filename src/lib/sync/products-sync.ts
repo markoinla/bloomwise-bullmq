@@ -9,13 +9,12 @@
 
 import { Job } from 'bullmq';
 import { logger } from '../utils/logger';
-import { updateSyncJobProgress } from '../../db/queries';
 import { executeGraphQLQuery } from '../shopify/client';
 import { PRODUCTS_QUERY } from '../shopify/graphql-queries';
 import { transformProductToDbRecords } from './transform-product.js';
 import { getDatabaseForEnvironment } from '../../config/database';
-import { shopifyProducts, shopifyVariants } from '../../db/schema';
-import { sql } from 'drizzle-orm';
+import { shopifyProducts, shopifyVariants, syncJobs } from '../../db/schema';
+import { sql, eq } from 'drizzle-orm';
 
 interface ProductsSyncParams {
   organizationId: string;
@@ -219,11 +218,17 @@ export async function syncShopifyProducts(
       // Update progress
       result.processedItems += products.length;
 
-      await updateSyncJobProgress(syncJobId, {
-        processedItems: result.processedItems,
-        successCount: result.successCount,
-        errorCount: result.errorCount,
-      });
+      await db
+        .update(syncJobs)
+        .set({
+          processedItems: result.processedItems,
+          totalItems: result.totalItems,
+          successCount: result.successCount,
+          errorCount: result.errorCount,
+          lastActivityAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(syncJobs.id, syncJobId));
 
       logger.info(
         {

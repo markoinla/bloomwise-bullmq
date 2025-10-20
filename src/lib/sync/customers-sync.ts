@@ -10,13 +10,12 @@
 
 import { Job } from 'bullmq';
 import { logger } from '../utils/logger';
-import { updateSyncJobProgress } from '../../db/queries';
 import { executeGraphQLQuery } from '../shopify/client';
 import { CUSTOMERS_QUERY } from '../shopify/graphql-queries';
 import { transformCustomerToDbRecord } from './transform-customer';
 import { getDatabaseForEnvironment } from '../../config/database';
-import { shopifyCustomers } from '../../db/schema';
-import { sql } from 'drizzle-orm';
+import { shopifyCustomers, syncJobs } from '../../db/schema';
+import { sql, eq } from 'drizzle-orm';
 
 interface CustomersSyncParams {
   organizationId: string;
@@ -187,12 +186,17 @@ export async function syncShopifyCustomers(
       result.totalItems += customersData.length;
       result.processedItems += customersData.length;
 
-      await updateSyncJobProgress(syncJobId, {
-        totalItems: result.totalItems,
-        processedItems: result.processedItems,
-        successCount: result.successCount,
-        errorCount: result.errorCount,
-      });
+      await db
+        .update(syncJobs)
+        .set({
+          totalItems: result.totalItems,
+          processedItems: result.processedItems,
+          successCount: result.successCount,
+          errorCount: result.errorCount,
+          lastActivityAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(syncJobs.id, syncJobId));
 
       // Check for next page
       hasNextPage = pageInfo.hasNextPage;
