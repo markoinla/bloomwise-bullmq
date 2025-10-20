@@ -850,8 +850,6 @@ export const CUSTOMERS_QUERY = `
           phone
           state
           verifiedEmail
-          acceptsMarketing
-          marketingOptInLevel
 
           # Email marketing consent
           emailMarketingConsent {
@@ -899,7 +897,7 @@ export const CUSTOMERS_QUERY = `
           }
 
           # Stats
-          ordersCount
+          numberOfOrders
           amountSpent {
             amount
             currencyCode

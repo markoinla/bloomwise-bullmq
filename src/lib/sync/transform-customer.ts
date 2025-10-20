@@ -13,8 +13,6 @@ interface ShopifyCustomerNode {
   phone?: string | null;
   state?: string | null;
   verifiedEmail?: boolean | null;
-  acceptsMarketing?: boolean | null;
-  marketingOptInLevel?: string | null;
   emailMarketingConsent?: {
     consentUpdatedAt?: string | null;
     marketingOptInLevel?: string | null;
@@ -52,7 +50,7 @@ interface ShopifyCustomerNode {
     lastName?: string | null;
     company?: string | null;
   }>;
-  ordersCount?: number | null;
+  numberOfOrders?: number | null;
   amountSpent?: {
     amount: string;
     currencyCode: string;
@@ -84,8 +82,8 @@ export function transformCustomerToDbRecord(
 
     // Marketing preferences
     verifiedEmail: customer.verifiedEmail || false,
-    acceptsMarketing: customer.acceptsMarketing || false,
-    marketingOptInLevel: customer.marketingOptInLevel || null,
+    acceptsMarketing: customer.emailMarketingConsent?.marketingState === 'SUBSCRIBED' || false,
+    marketingOptInLevel: customer.emailMarketingConsent?.marketingOptInLevel || null,
     emailMarketingConsent: customer.emailMarketingConsent || null,
     smsMarketingConsent: customer.smsMarketingConsent || null,
 
@@ -94,7 +92,7 @@ export function transformCustomerToDbRecord(
     addresses: customer.addresses || null,
 
     // Stats
-    ordersCount: customer.ordersCount || 0,
+    ordersCount: customer.numberOfOrders || 0,
     totalSpent: customer.amountSpent?.amount || null,
     currency: customer.amountSpent?.currencyCode || null,
 
