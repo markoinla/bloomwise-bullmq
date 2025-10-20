@@ -131,14 +131,14 @@ async function createInternalOrder(
   // ============================================
   // FULFILLMENT TYPE DETECTION
   // ============================================
-  let fulfillmentType: 'pickup' | 'delivery' | 'shipping' = 'shipping'; // Default
+  let fulfillmentType: string = 'not available'; // Default to "not available" instead of shipping
 
   // Check for pickup location
   if (shopifyOrder.pickupLocation) {
     fulfillmentType = 'pickup';
     jobLogger.info('Detected pickup order from pickupLocation');
   }
-  // Check shipping lines for delivery
+  // Check shipping lines for delivery or shipping
   else if (rawData.shipping_lines && rawData.shipping_lines.length > 0) {
     const shippingTitle = rawData.shipping_lines[0].title?.toLowerCase() || '';
 
@@ -154,7 +154,7 @@ async function createInternalOrder(
       jobLogger.info({ shippingTitle }, 'Detected shipping from shipping line');
     }
   }
-  // Also check tags for delivery indicators
+  // Check tags for delivery indicators
   else if (rawData.tags) {
     const tagsArray = Array.isArray(rawData.tags)
       ? rawData.tags
@@ -168,6 +168,9 @@ async function createInternalOrder(
     ) {
       fulfillmentType = 'delivery';
       jobLogger.info({ tags: tagsArray }, 'Detected delivery from tags');
+    } else if (tagsLower.some((tag: string) => tag.includes('pickup'))) {
+      fulfillmentType = 'pickup';
+      jobLogger.info({ tags: tagsArray }, 'Detected pickup from tags');
     }
   }
 

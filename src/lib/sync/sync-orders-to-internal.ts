@@ -262,7 +262,8 @@ function transformShopifyOrderToInternal(shopifyOrder: any) {
   const rawData = shopifyOrder.rawData as any;
 
   // Determine fulfillment type from pickup_location or tags
-  let fulfillmentType = 'shipping';
+  // Default to "not available" instead of assuming shipping
+  let fulfillmentType = 'not available';
   const pickupLocationStr = shopifyOrder.pickupLocation || '';
 
   if (pickupLocationStr.startsWith('LOCAL_DELIVERY:')) {
@@ -273,6 +274,17 @@ function transformShopifyOrderToInternal(shopifyOrder: any) {
     fulfillmentType = 'delivery';
   } else if (shopifyOrder.tags && shopifyOrder.tags.toLowerCase().includes('pickup')) {
     fulfillmentType = 'pickup';
+  } else if (shopifyOrder.tags && shopifyOrder.tags.toLowerCase().includes('shipping')) {
+    fulfillmentType = 'shipping';
+  }
+  // If order has shipping lines, check if it's delivery or shipping
+  else if (rawData.shippingLines && rawData.shippingLines.length > 0) {
+    const shippingTitle = rawData.shippingLines[0].title?.toLowerCase() || '';
+    if (shippingTitle.includes('local') || shippingTitle.includes('delivery')) {
+      fulfillmentType = 'delivery';
+    } else if (shippingTitle) {
+      fulfillmentType = 'shipping';
+    }
   }
 
   // Determine order status based on financial and fulfillment status
