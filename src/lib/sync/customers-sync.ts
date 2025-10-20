@@ -198,6 +198,33 @@ export async function syncShopifyCustomers(
         })
         .where(eq(syncJobs.id, syncJobId));
 
+      // Sync this batch to internal customers table
+      try {
+        const { syncCustomersToInternal } = await import('./sync-customers-to-internal.js');
+        const customerIds = customersData.map(c => c.legacyResourceId);
+
+        const internalSyncResult = await syncCustomersToInternal({
+          organizationId,
+          syncJobId,
+          shopifyCustomerIds: customerIds,
+          environment,
+        });
+
+        logger.info(
+          {
+            batchNumber,
+            customersCreated: internalSyncResult.customersCreated,
+            customersUpdated: internalSyncResult.customersUpdated,
+          },
+          'Synced batch to internal customers'
+        );
+        await job?.log(`✅ Batch ${batchNumber}: Synced ${internalSyncResult.customersProcessed} customers to internal table (${internalSyncResult.customersCreated} created, ${internalSyncResult.customersUpdated} updated)`);
+      } catch (error) {
+        logger.error({ error, batchNumber }, 'Failed to sync batch to internal customers (non-fatal)');
+        await job?.log(`⚠️ Batch ${batchNumber}: Failed to sync to internal table (Shopify sync succeeded)`);
+        // Don't throw - Shopify sync already succeeded
+      }
+
       // Check for next page
       hasNextPage = pageInfo.hasNextPage;
       cursor = pageInfo.endCursor;
