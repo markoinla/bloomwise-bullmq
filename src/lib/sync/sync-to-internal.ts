@@ -94,11 +94,14 @@ export async function syncShopifyProductsToInternal(
         // Get variant IDs
         const shopifyVariantIds = productVariants.map(v => v.shopifyVariantId);
 
+        // Map Shopify productType to internal type
+        const productType = sp.productType?.toLowerCase() || 'recipe';
+
         return {
           organization_id: organizationId,
           shopify_product_id: sp.shopifyProductId,
           shopify_variant_ids: shopifyVariantIds,
-          type: 'recipe', // Default type for all products
+          type: productType,
           name: sp.title,
           description: sp.bodyHtml,
           sku: sp.handle, // Use handle as SKU
@@ -155,9 +158,11 @@ export async function syncShopifyProductsToInternal(
             .onConflictDoUpdate({
               target: [products.organizationId, products.shopifyProductId],
               set: {
+                type: sql`excluded.type`,
                 name: sql`excluded.name`,
                 description: sql`excluded.description`,
                 price: sql`excluded.price`,
+                category: sql`excluded.category`,
                 primaryImageUrl: sql`excluded.primary_image_url`,
                 imageUrls: sql`excluded.image_urls`,
                 tags: sql`excluded.tags`,
