@@ -43,9 +43,10 @@ export function detectEnvironment(req: Request, _res: Response, next: NextFuncti
 
   // Log for debugging
   console.log('[ENV DETECTION]', {
-    origin,
-    referer,
-    host,
+    origin: origin || '(empty)',
+    referer: referer || '(empty)',
+    host: host || '(empty)',
+    combinedHeaders: headers,
     detected: req.environment,
     path: req.path,
   });
