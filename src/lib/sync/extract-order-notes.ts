@@ -212,11 +212,33 @@ export async function extractAndInsertOrderNotes(options: ExtractNotesOptions): 
 
     // Batch insert all notes
     if (notesToInsert.length > 0) {
-      await db.insert(notes).values(notesToInsert);
-      result.notesCreated = notesToInsert.length;
+      // Deduplicate notes by creating a unique key from entity + content
+      const uniqueNotes = new Map();
+      for (const note of notesToInsert) {
+        const key = `${note.entityType}:${note.entityId}:${note.shopifyAttributeName || note.title}:${note.content}`;
+        if (!uniqueNotes.has(key)) {
+          uniqueNotes.set(key, note);
+        }
+      }
+
+      const notesToInsertDeduped = Array.from(uniqueNotes.values());
+
+      await db.insert(notes).values(notesToInsertDeduped);
+      result.notesCreated = notesToInsertDeduped.length;
+
+      if (notesToInsertDeduped.length < notesToInsert.length) {
+        logger.info(
+          {
+            total: notesToInsert.length,
+            unique: notesToInsertDeduped.length,
+            duplicates: notesToInsert.length - notesToInsertDeduped.length,
+          },
+          'Deduplicated notes before insertion'
+        );
+      }
 
       logger.info(
-        { count: notesToInsert.length, organizationId },
+        { count: notesToInsertDeduped.length, organizationId },
         'Batch inserted notes from Shopify orders'
       );
     }
