@@ -128,13 +128,62 @@ export const shopifyProductsWorker = new Worker<ShopifyProductsSyncJob>(
 );
 
 shopifyProductsWorker.on('completed', (job) => {
-  logger.info({ jobId: job.id }, 'Job completed');
+  logger.info(
+    {
+      jobId: job.id,
+      organizationId: job.data.organizationId,
+      syncJobId: job.data.syncJobId,
+      type: job.data.type,
+      returnValue: job.returnvalue,
+    },
+    'Products sync job completed'
+  );
 });
 
 shopifyProductsWorker.on('failed', (job, err) => {
-  logger.error({ jobId: job?.id, error: err }, 'Job failed');
+  logger.error(
+    {
+      jobId: job?.id,
+      organizationId: job?.data?.organizationId,
+      syncJobId: job?.data?.syncJobId,
+      type: job?.data?.type,
+      error: err.message,
+      stack: err.stack,
+      attemptsMade: job?.attemptsMade,
+      attemptsMax: job?.opts?.attempts,
+    },
+    'Products sync job failed'
+  );
 });
 
 shopifyProductsWorker.on('error', (err) => {
-  logger.error({ error: err }, 'Worker error');
+  logger.error({ error: err.message, stack: err.stack }, 'Products worker error');
+});
+
+shopifyProductsWorker.on('active', (job) => {
+  logger.info(
+    {
+      jobId: job.id,
+      organizationId: job.data.organizationId,
+      syncJobId: job.data.syncJobId,
+      type: job.data.type,
+    },
+    'Products sync job started'
+  );
+});
+
+shopifyProductsWorker.on('progress', (job, progress) => {
+  logger.debug(
+    {
+      jobId: job.id,
+      organizationId: job.data.organizationId,
+      syncJobId: job.data.syncJobId,
+      progress,
+    },
+    'Products sync progress update'
+  );
+});
+
+shopifyProductsWorker.on('stalled', (jobId) => {
+  logger.warn({ jobId }, 'Products sync job stalled');
 });

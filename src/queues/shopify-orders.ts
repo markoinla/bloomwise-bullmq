@@ -175,13 +175,64 @@ export const shopifyOrdersWorker = new Worker(
 
 // Event handlers
 shopifyOrdersWorker.on('completed', (job) => {
-  logger.info({ jobId: job.id }, 'Job completed');
+  logger.info(
+    {
+      jobId: job.id,
+      organizationId: job.data.organizationId,
+      syncJobId: job.data.syncJobId,
+      integrationId: job.data.integrationId,
+      fetchAll: job.data.fetchAll,
+      returnValue: job.returnvalue,
+    },
+    'Orders sync job completed'
+  );
 });
 
 shopifyOrdersWorker.on('failed', (job, err) => {
-  logger.error({ jobId: job?.id, error: err }, 'Job failed');
+  logger.error(
+    {
+      jobId: job?.id,
+      organizationId: job?.data?.organizationId,
+      syncJobId: job?.data?.syncJobId,
+      integrationId: job?.data?.integrationId,
+      error: err.message,
+      stack: err.stack,
+      attemptsMade: job?.attemptsMade,
+      attemptsMax: job?.opts?.attempts,
+    },
+    'Orders sync job failed'
+  );
 });
 
 shopifyOrdersWorker.on('error', (err) => {
-  logger.error({ error: err }, 'Worker error');
+  logger.error({ error: err.message, stack: err.stack }, 'Orders worker error');
+});
+
+shopifyOrdersWorker.on('active', (job) => {
+  logger.info(
+    {
+      jobId: job.id,
+      organizationId: job.data.organizationId,
+      syncJobId: job.data.syncJobId,
+      integrationId: job.data.integrationId,
+      fetchAll: job.data.fetchAll,
+    },
+    'Orders sync job started'
+  );
+});
+
+shopifyOrdersWorker.on('progress', (job, progress) => {
+  logger.debug(
+    {
+      jobId: job.id,
+      organizationId: job.data.organizationId,
+      syncJobId: job.data.syncJobId,
+      progress,
+    },
+    'Orders sync progress update'
+  );
+});
+
+shopifyOrdersWorker.on('stalled', (jobId) => {
+  logger.warn({ jobId }, 'Orders sync job stalled');
 });
