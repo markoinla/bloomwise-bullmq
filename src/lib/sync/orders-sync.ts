@@ -109,7 +109,7 @@ export async function syncShopifyOrders(
         { shopDomain, accessToken },
         ORDERS_QUERY,
         {
-          first: 200, // Increased batch size for better performance (max 250 per Shopify API)
+          first: 250, // Maximum batch size allowed by Shopify API
           after: currentCursor,
           query: graphqlQuery,
           sortKey: 'UPDATED_AT',
@@ -180,22 +180,24 @@ export async function syncShopifyOrders(
       result.successCount += orders.length;
       result.totalItems += orders.length;
 
-      // Update sync job progress in database
-      await db
-        .update(syncJobs)
-        .set({
-          processedItems: result.processedItems,
-          totalItems: result.totalItems,
-          successCount: result.successCount,
-          errorCount: result.errorCount,
-          updatedAt: new Date(),
-        })
-        .where(eq(syncJobs.id, syncJobId));
+      // Update sync job progress in database (batch every 3 iterations to reduce DB load)
+      if (batchNumber % 3 === 0 || !hasMore) {
+        await db
+          .update(syncJobs)
+          .set({
+            processedItems: result.processedItems,
+            totalItems: result.totalItems,
+            successCount: result.successCount,
+            errorCount: result.errorCount,
+            updatedAt: new Date(),
+          })
+          .where(eq(syncJobs.id, syncJobId));
 
-      // Update job progress if available
-      if (job) {
-        const progress = Math.round((result.processedItems / (result.totalItems || 1)) * 100);
-        await job.updateProgress(progress);
+        // Update job progress if available
+        if (job) {
+          const progress = Math.round((result.processedItems / (result.totalItems || 1)) * 100);
+          await job.updateProgress(progress);
+        }
       }
 
       // Sync this batch to internal tables immediately
@@ -244,10 +246,10 @@ export async function syncShopifyOrders(
       result.hasNextPage = pageInfo.hasNextPage;
       result.endCursor = currentCursor;
 
-      // Add delay between pages to respect rate limits and avoid throttling
-      // Increased to 500ms to be more conservative during large syncs
-      if (hasMore) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+      // Add delay between pages to respect rate limits (only for large full syncs)
+      // For incremental syncs or first few batches, no delay needed
+      if (hasMore && fetchAll && batchNumber >= 3) {
+        await new Promise(resolve => setTimeout(resolve, 300));
       }
     }
 
