@@ -8,6 +8,7 @@ import { eq, and, sql, inArray } from 'drizzle-orm';
 import { logger } from '../utils/logger';
 import { extractAndInsertOrderNotes } from './extract-order-notes';
 import { extractAndInsertOrderTags } from './extract-order-tags';
+import { linkOrderItemsToProducts } from './link-order-item-products';
 
 interface OrderSyncOptions {
   organizationId: string;
@@ -333,6 +334,37 @@ export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{
       `);
 
       logger.info({ count: shopifyOrdersToLink.length }, 'Batch updated shopify_orders with internal_order_id');
+    }
+
+    // Link order items to products after all items are created
+    const allProcessedOrderIds = [
+      ...shopifyOrdersToLink.map(o => o.internalOrderId),
+      ...linkedOrders.map(o => o.internalOrderId!),
+    ];
+
+    if (allProcessedOrderIds.length > 0) {
+      logger.info({ orderCount: allProcessedOrderIds.length }, 'Linking order items to products');
+
+      try {
+        const linkingResult = await linkOrderItemsToProducts(
+          allProcessedOrderIds,
+          organizationId,
+          environment
+        );
+
+        logger.info(
+          {
+            totalItems: linkingResult.totalItems,
+            linkedProducts: linkingResult.linkedProducts,
+            linkedVariants: linkingResult.linkedVariants,
+            notFound: linkingResult.notFound,
+          },
+          'Completed order items product linking'
+        );
+      } catch (error) {
+        // Don't fail the whole sync if linking fails
+        logger.error({ error }, 'Failed to link order items to products, but continuing');
+      }
     }
 
     logger.info(
