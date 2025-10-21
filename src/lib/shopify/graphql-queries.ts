@@ -370,6 +370,12 @@ export const ORDERS_QUERY = `
           # Note
           note
 
+          # Custom attributes (noteAttributes in REST API)
+          customAttributes {
+            key
+            value
+          }
+
           # Tags
           tags
 
@@ -562,6 +568,12 @@ export const ORDER_QUERY = `
       }
 
       note
+
+      customAttributes {
+        key
+        value
+      }
+
       tags
 
       metafields(first: 20) {
