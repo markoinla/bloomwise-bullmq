@@ -107,6 +107,13 @@ export async function extractAndInsertOrderNotes(options: ExtractNotesOptions): 
       // Need to fetch order items to link notes to them
       const lineItems = rawData?.lineItems?.edges || rawData?.line_items || [];
 
+      logger.debug({
+        orderId: internalOrderId,
+        shopifyOrderId: shopifyOrder.shopifyOrderId,
+        hasRawData: !!rawData,
+        lineItemsCount: lineItems.length,
+      }, 'Processing line items for notes extraction');
+
       if (lineItems.length > 0) {
         // Fetch order items for this order, ordered by displayOrder to match lineItems array
         const orderItemsForOrder = await db
@@ -120,6 +127,13 @@ export async function extractAndInsertOrderNotes(options: ExtractNotesOptions): 
           // Handle both GraphQL (edge.node) and REST (direct) formats
           const lineItem = lineItemData.node || lineItemData;
           const properties = lineItem.properties || lineItem.customAttributes || [];
+
+          logger.debug({
+            lineIndex,
+            hasNode: !!lineItemData.node,
+            propertiesCount: properties?.length || 0,
+            propertyKeys: properties?.map((p: any) => p.name || p.key) || [],
+          }, 'Processing line item properties');
 
           if (!properties || !Array.isArray(properties) || properties.length === 0) {
             return;
@@ -140,18 +154,36 @@ export async function extractAndInsertOrderNotes(options: ExtractNotesOptions): 
             const propName = prop.name || prop.key;
             const propValue = prop.value;
 
-            if (!propName || !propValue) continue;
+            if (!propName || !propValue) {
+              logger.debug({ propName, hasValue: !!propValue }, 'Skipping property - missing name or value');
+              continue;
+            }
 
             // Skip internal/system properties
-            if (propName.startsWith('_')) continue;
+            if (propName.startsWith('_')) {
+              logger.debug({ propName }, 'Skipping property - starts with underscore');
+              continue;
+            }
 
             // Skip Zapiet properties (already in structured fields)
-            if (propName.toLowerCase().includes('zapiet')) continue;
+            if (propName.toLowerCase().includes('zapiet')) {
+              logger.debug({ propName }, 'Skipping property - contains zapiet');
+              continue;
+            }
 
             const { noteType, title, visibility, entityType } = categorizeLineItemProperty(
               propName,
               lineItem.name || orderItem.name
             );
+
+            logger.debug({
+              propName,
+              noteType,
+              title,
+              visibility,
+              entityType,
+              willAddNote: true,
+            }, 'Adding note from line item property');
 
             notesToInsert.push({
               organizationId,
