@@ -108,11 +108,12 @@ export async function extractAndInsertOrderNotes(options: ExtractNotesOptions): 
       const lineItems = rawData?.lineItems?.edges || rawData?.line_items || [];
 
       if (lineItems.length > 0) {
-        // Fetch order items for this order
+        // Fetch order items for this order, ordered by displayOrder to match lineItems array
         const orderItemsForOrder = await db
           .select()
           .from(orderItems)
-          .where(eq(orderItems.orderId, internalOrderId));
+          .where(eq(orderItems.orderId, internalOrderId))
+          .orderBy(orderItems.displayOrder);
 
         // Process line items and their properties
         lineItems.forEach((lineItemData: any, lineIndex: number) => {
