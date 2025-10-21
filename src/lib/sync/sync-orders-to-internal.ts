@@ -444,6 +444,18 @@ function transformShopifyOrderToInternal(shopifyOrder: any) {
   const shippingAddress = rawData.shippingAddress || {};
   const billingAddress = rawData.billingAddress || {};
 
+  // Build shipping name from firstName/lastName (GraphQL format) or use name field (REST format)
+  const shippingName = shippingAddress.name ||
+    (shippingAddress.firstName && shippingAddress.lastName
+      ? `${shippingAddress.firstName} ${shippingAddress.lastName}`.trim()
+      : shippingAddress.firstName || shippingAddress.lastName || '');
+
+  // Build billing name from firstName/lastName (GraphQL format) or use name field (REST format)
+  const billingName = billingAddress.name ||
+    (billingAddress.firstName && billingAddress.lastName
+      ? `${billingAddress.firstName} ${billingAddress.lastName}`.trim()
+      : billingAddress.firstName || billingAddress.lastName || '');
+
   // Determine due date from pickup_date (Zapiet) or try to parse from tags, or use order created date
   let dueDate = shopifyOrder.shopifyCreatedAt;
 
@@ -492,7 +504,7 @@ function transformShopifyOrderToInternal(shopifyOrder: any) {
     deliveryAddress: shopifyOrder.pickupLocation || shippingAddress.address1,
     deliveryInstructions: shopifyOrder.note,
     deliveryFee: null,
-    shippingName: shippingAddress.name,
+    shippingName: shippingName,
     shippingPhone: shippingAddress.phone,
     shippingEmail: null,
     shippingAddress1: shippingAddress.address1,
@@ -502,7 +514,7 @@ function transformShopifyOrderToInternal(shopifyOrder: any) {
     shippingZip: shippingAddress.zip,
     shippingCountry: shippingAddress.countryCode || shippingAddress.country,
     shippingCompany: shippingAddress.company,
-    billingName: billingAddress.name,
+    billingName: billingName,
     billingPhone: billingAddress.phone,
     billingEmail: null,
     billingAddress1: billingAddress.address1,
