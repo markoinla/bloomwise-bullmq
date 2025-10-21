@@ -9,7 +9,7 @@
  */
 
 import { Job } from 'bullmq';
-import { logger } from '../utils/logger';
+import { logger, createJobLogger } from '../utils/logger';
 import { executeGraphQLQuery } from '../shopify/client';
 import { CUSTOMERS_QUERY } from '../shopify/graphql-queries';
 import { transformCustomerToDbRecord } from './transform-customer';
@@ -55,6 +55,9 @@ export async function syncShopifyCustomers(
 
   const db = getDatabaseForEnvironment(environment);
 
+  // Create job-specific logger if job is provided, otherwise use base logger
+  const syncLogger = job ? createJobLogger(job.id!, organizationId) : logger.child({ organizationId, syncJobId });
+
   const result: CustomersSyncResult = {
     success: true,
     totalItems: 0,
@@ -65,7 +68,7 @@ export async function syncShopifyCustomers(
   };
 
   try {
-    logger.info(
+    syncLogger.info(
       { organizationId, syncJobId, shopDomain, fetchAll },
       'Starting Shopify customers sync'
     );
@@ -86,7 +89,7 @@ export async function syncShopifyCustomers(
     while (hasNextPage) {
       batchNumber++;
 
-      logger.info(
+      syncLogger.info(
         { batchNumber, cursor, syncJobId },
         'Fetching customers batch from Shopify'
       );
@@ -134,7 +137,7 @@ export async function syncShopifyCustomers(
           customersToUpsert.push(customerRecord);
           result.successCount++;
         } catch (error) {
-          logger.error(
+          syncLogger.error(
             {
               error,
               customerId: customer.id,
@@ -178,7 +181,7 @@ export async function syncShopifyCustomers(
             },
           });
 
-        logger.info({ count: customersToUpsert.length }, 'Batch upserted Shopify customers');
+        syncLogger.info({ count: customersToUpsert.length }, 'Batch upserted Shopify customers');
         await job?.log(`✅ Batch ${batchNumber}: Upserted ${customersToUpsert.length} customers to database`);
       }
 
@@ -210,7 +213,7 @@ export async function syncShopifyCustomers(
           environment,
         });
 
-        logger.info(
+        syncLogger.info(
           {
             batchNumber,
             customersCreated: internalSyncResult.customersCreated,
@@ -220,7 +223,7 @@ export async function syncShopifyCustomers(
         );
         await job?.log(`✅ Batch ${batchNumber}: Synced ${internalSyncResult.customersProcessed} customers to internal table (${internalSyncResult.customersCreated} created, ${internalSyncResult.customersUpdated} updated)`);
       } catch (error) {
-        logger.error({ error, batchNumber }, 'Failed to sync batch to internal customers (non-fatal)');
+        syncLogger.error({ error, batchNumber }, 'Failed to sync batch to internal customers (non-fatal)');
         await job?.log(`⚠️ Batch ${batchNumber}: Failed to sync to internal table (Shopify sync succeeded)`);
         // Don't throw - Shopify sync already succeeded
       }
@@ -229,7 +232,7 @@ export async function syncShopifyCustomers(
       hasNextPage = pageInfo.hasNextPage;
       cursor = pageInfo.endCursor;
 
-      logger.info(
+      syncLogger.info(
         {
           batchNumber,
           processedInBatch: customersData.length,
@@ -246,7 +249,7 @@ export async function syncShopifyCustomers(
       }
     }
 
-    logger.info(
+    syncLogger.info(
       {
         syncJobId,
         totalCustomers: result.totalItems,
@@ -259,7 +262,7 @@ export async function syncShopifyCustomers(
 
     return result;
   } catch (error) {
-    logger.error(
+    syncLogger.error(
       { error, syncJobId, organizationId },
       'Shopify customers sync failed'
     );

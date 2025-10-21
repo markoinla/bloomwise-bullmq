@@ -155,15 +155,15 @@ export async function syncShopifyProductsToInternal(
             .onConflictDoUpdate({
               target: [products.organizationId, products.shopifyProductId],
               set: {
-                name: productsForDrizzle[0].name, // Drizzle will use excluded.name
-                description: productsForDrizzle[0].description,
-                price: productsForDrizzle[0].price,
-                primaryImageUrl: productsForDrizzle[0].primaryImageUrl,
-                imageUrls: productsForDrizzle[0].imageUrls,
-                tags: productsForDrizzle[0].tags,
-                isActive: productsForDrizzle[0].isActive,
-                isPublished: productsForDrizzle[0].isPublished,
-                publishedAt: productsForDrizzle[0].publishedAt,
+                name: sql`excluded.name`,
+                description: sql`excluded.description`,
+                price: sql`excluded.price`,
+                primaryImageUrl: sql`excluded.primary_image_url`,
+                imageUrls: sql`excluded.image_urls`,
+                tags: sql`excluded.tags`,
+                isActive: sql`excluded.is_active`,
+                isPublished: sql`excluded.is_published`,
+                publishedAt: sql`excluded.published_at`,
                 updatedAt: new Date(),
               },
             });

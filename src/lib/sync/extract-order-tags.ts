@@ -118,6 +118,9 @@ export async function extractAndInsertOrderTags(options: ExtractTagsOptions): Pr
       const newTags = await db
         .insert(tags)
         .values(tagsToCreate)
+        .onConflictDoNothing({
+          target: [tags.organizationId, tags.name],
+        })
         .returning();
 
       result.tagsCreated = newTags.length;
@@ -126,6 +129,34 @@ export async function extractAndInsertOrderTags(options: ExtractTagsOptions): Pr
       newTags.forEach(tag => {
         existingTagMap.set(tag.name, tag);
       });
+
+      // If some tags were skipped due to conflict, fetch them
+      if (newTags.length < tagsToCreate.length) {
+        const skippedTagNames = tagsToCreate
+          .filter(t => !newTags.find(nt => nt.name === t.name))
+          .map(t => t.name);
+
+        if (skippedTagNames.length > 0) {
+          const skippedTags = await db
+            .select()
+            .from(tags)
+            .where(
+              and(
+                eq(tags.organizationId, organizationId),
+                inArray(tags.name, skippedTagNames)
+              )
+            );
+
+          skippedTags.forEach(tag => {
+            existingTagMap.set(tag.name, tag);
+          });
+
+          logger.info(
+            { count: skippedTags.length, organizationId },
+            'Fetched tags that were skipped due to conflicts'
+          );
+        }
+      }
     }
 
     // Now link tags to orders via taggables table

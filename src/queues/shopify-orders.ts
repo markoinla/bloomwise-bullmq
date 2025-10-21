@@ -87,6 +87,7 @@ async function processShopifyOrdersSync(job: Job<ShopifyOrdersJobData>) {
       fetchAll,
       updatedAtMin: fetchAll ? undefined : integration.lastOrderSyncAt || undefined,
       environment,
+      job, // Pass job for progress tracking and logging
     });
 
     // Note: Internal sync now happens incrementally during Shopify fetch (after each batch)

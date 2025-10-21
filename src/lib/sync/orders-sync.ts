@@ -7,10 +7,11 @@
 import { getDatabaseForEnvironment } from '../../config/database';
 import { shopifyOrders, syncJobs } from '../../db/schema';
 import { sql, eq } from 'drizzle-orm';
-import { logger } from '../utils/logger';
+import { logger, createJobLogger } from '../utils/logger';
 import { executeGraphQLQuery } from '../shopify/client';
 import { ORDERS_QUERY, type ShopifyOrder } from '../shopify/graphql-queries';
 import { syncOrdersToInternal } from './sync-orders-to-internal';
+import type { Job } from 'bullmq';
 
 export interface OrdersSyncOptions {
   organizationId: string;
@@ -21,6 +22,7 @@ export interface OrdersSyncOptions {
   cursor?: string;
   updatedAtMin?: Date;
   environment?: 'staging' | 'production';
+  job?: Job; // Optional job for progress tracking and logging
 }
 
 export interface OrdersSyncResult {
@@ -49,9 +51,13 @@ export async function syncShopifyOrders(
     cursor,
     updatedAtMin,
     environment = 'production',
+    job,
   } = options;
 
   const db = getDatabaseForEnvironment(environment);
+
+  // Create job-specific logger if job is provided, otherwise use base logger
+  const syncLogger = job ? createJobLogger(job.id!, organizationId) : logger.child({ organizationId, syncJobId });
 
   const result: OrdersSyncResult = {
     success: true,
@@ -63,7 +69,7 @@ export async function syncShopifyOrders(
     hasNextPage: false,
   };
 
-  logger.info(
+  syncLogger.info(
     { organizationId, syncJobId, shopDomain, fetchAll, environment },
     'Starting Shopify orders sync'
   );
@@ -83,7 +89,7 @@ export async function syncShopifyOrders(
 
     while (hasMore) {
       batchNumber++;
-      logger.info(
+      syncLogger.info(
         { batchNumber, cursor: currentCursor, syncJobId },
         'Fetching orders batch from Shopify'
       );
@@ -122,7 +128,7 @@ export async function syncShopifyOrders(
       const orders = response.data.orders.edges.map(edge => edge.node);
       const pageInfo = response.data.orders.pageInfo;
 
-      logger.info({ count: orders.length, batchNumber }, 'Received orders from Shopify');
+      syncLogger.info({ count: orders.length, batchNumber }, 'Received orders from Shopify');
 
       if (orders.length === 0) {
         break;
@@ -167,7 +173,7 @@ export async function syncShopifyOrders(
             },
           });
 
-        logger.info({ count: ordersToUpsert.length }, 'Batch upserted orders');
+        syncLogger.info({ count: ordersToUpsert.length }, 'Batch upserted orders');
       }
 
       result.processedItems += orders.length;
@@ -186,8 +192,14 @@ export async function syncShopifyOrders(
         })
         .where(eq(syncJobs.id, syncJobId));
 
+      // Update job progress if available
+      if (job) {
+        const progress = Math.round((result.processedItems / (result.totalItems || 1)) * 100);
+        await job.updateProgress(progress);
+      }
+
       // Sync this batch to internal tables immediately
-      logger.info(
+      syncLogger.info(
         { batchNumber, syncJobId, orderCount: orders.length },
         'Syncing batch to internal orders and order_items tables'
       );
@@ -203,7 +215,7 @@ export async function syncShopifyOrders(
           environment,
         });
 
-        logger.info(
+        syncLogger.info(
           {
             batchNumber,
             ordersProcessed: internalSyncResult.ordersProcessed,
@@ -212,7 +224,7 @@ export async function syncShopifyOrders(
           'Batch synced to internal tables'
         );
       } catch (error) {
-        logger.error(
+        syncLogger.error(
           { error, batchNumber, syncJobId },
           'Failed to sync batch to internal tables (continuing with next batch)'
         );
@@ -239,7 +251,7 @@ export async function syncShopifyOrders(
       }
     }
 
-    logger.info(
+    syncLogger.info(
       {
         syncJobId,
         totalProcessed: result.processedItems,
@@ -251,7 +263,7 @@ export async function syncShopifyOrders(
 
     return result;
   } catch (error) {
-    logger.error({ error, syncJobId, organizationId }, 'Shopify orders sync failed');
+    syncLogger.error({ error, syncJobId, organizationId }, 'Shopify orders sync failed');
     result.success = false;
     result.errorCount = result.totalItems - result.successCount;
     throw error;

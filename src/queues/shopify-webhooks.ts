@@ -719,13 +719,50 @@ export const shopifyWebhooksWorker = new Worker(
 
 // Event handlers
 shopifyWebhooksWorker.on('completed', (job) => {
-  logger.info({ jobId: job.id }, 'Webhook job completed');
+  logger.info(
+    {
+      jobId: job.id,
+      jobName: job.name,
+      organizationId: job.data.organizationId,
+      action: job.data.action,
+      returnValue: job.returnvalue,
+    },
+    'Webhook job completed'
+  );
 });
 
 shopifyWebhooksWorker.on('failed', (job, err) => {
-  logger.error({ jobId: job?.id, error: err }, 'Webhook job failed');
+  logger.error(
+    {
+      jobId: job?.id,
+      jobName: job?.name,
+      organizationId: job?.data?.organizationId,
+      action: job?.data?.action,
+      error: err.message,
+      stack: err.stack,
+      attemptsMade: job?.attemptsMade,
+      attemptsMax: job?.opts?.attempts,
+    },
+    'Webhook job failed'
+  );
 });
 
 shopifyWebhooksWorker.on('error', (err) => {
-  logger.error({ error: err }, 'Webhook worker error');
+  logger.error({ error: err.message, stack: err.stack }, 'Webhook worker error');
+});
+
+shopifyWebhooksWorker.on('active', (job) => {
+  logger.info(
+    {
+      jobId: job.id,
+      jobName: job.name,
+      organizationId: job.data.organizationId,
+      action: job.data.action,
+    },
+    'Webhook job started'
+  );
+});
+
+shopifyWebhooksWorker.on('stalled', (jobId) => {
+  logger.warn({ jobId }, 'Webhook job stalled');
 });

@@ -294,6 +294,96 @@ router.get('/sync/status/:syncJobId', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/sync/orders/internal
+ * Sync orders from shopify_orders table to internal orders (no Shopify API calls)
+ * This is useful for re-processing existing data without hitting Shopify rate limits
+ */
+router.post('/sync/orders/internal', async (req: Request, res: Response) => {
+  try {
+    const { organizationId, shopifyOrderIds } = req.body;
+    const environment = req.environment || 'production';
+
+    if (!organizationId) {
+      return res.status(400).json({
+        error: 'Missing required field: organizationId',
+      });
+    }
+
+    logger.info(
+      {
+        organizationId,
+        orderCount: shopifyOrderIds?.length || 'all',
+        environment
+      },
+      'API: Enqueue internal orders sync request'
+    );
+
+    const envDb = getDatabaseForEnvironment(environment);
+
+    // Create sync job record
+    const syncJobId = createId();
+
+    await envDb.insert(syncJobs).values({
+      id: syncJobId,
+      organizationId,
+      type: 'shopify_orders_incremental',
+      status: 'pending',
+      config: {
+        source: 'api',
+        syncToInternal: true,
+        filters: {
+          internalOnly: true, // Flag to indicate this is internal-only sync (no Shopify API calls)
+          shopifyOrderIds: shopifyOrderIds || null,
+        },
+      },
+    });
+
+    // Import the sync function and run it directly (no BullMQ queue needed)
+    const { syncOrdersToInternal } = await import('../lib/sync/sync-orders-to-internal.js');
+
+    // Run sync in background but return immediately
+    syncOrdersToInternal({
+      organizationId,
+      syncJobId,
+      shopifyOrderIds: shopifyOrderIds || undefined,
+      environment,
+    })
+      .then(result => {
+        logger.info(
+          {
+            syncJobId,
+            organizationId,
+            ordersProcessed: result.ordersProcessed,
+            orderItemsCreated: result.orderItemsCreated,
+          },
+          'Internal orders sync completed'
+        );
+      })
+      .catch(error => {
+        logger.error({ error, syncJobId, organizationId }, 'Internal orders sync failed');
+      });
+
+    logger.info({ syncJobId, organizationId }, 'API: Internal orders sync started');
+
+    return res.status(200).json({
+      success: true,
+      syncJobId,
+      organizationId,
+      type: 'internal',
+      orderCount: shopifyOrderIds?.length || 'all',
+      message: 'Internal orders sync started (syncing from shopify_orders table)',
+      statusUrl: `/api/sync/status/${syncJobId}`,
+    });
+  } catch (error) {
+    logger.error({ error }, 'API: Failed to start internal orders sync');
+    return res.status(500).json({
+      error: 'Failed to start internal orders sync',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
  * POST /api/sync/customers
  * Enqueue a Shopify customers sync job
  */
