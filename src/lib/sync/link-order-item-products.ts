@@ -27,7 +27,7 @@ interface LinkingResult {
 export async function linkOrderItemsToProducts(
   orderIds: string[],
   organizationId: string,
-  environment: 'staging' | 'production' = 'production'
+  environment: 'dev' | 'staging' | 'production' = 'production'
 ): Promise<LinkingResult> {
   const db = getDatabaseForEnvironment(environment);
 

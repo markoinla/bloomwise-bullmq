@@ -21,7 +21,7 @@ export interface OrdersSyncOptions {
   fetchAll?: boolean;
   cursor?: string;
   updatedAtMin?: Date;
-  environment?: 'staging' | 'production';
+  environment?: 'dev' | 'staging' | 'production';
   job?: Job; // Optional job for progress tracking and logging
 }
 

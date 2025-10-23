@@ -70,7 +70,7 @@ export interface ShopifyProductsSyncJob {
   integrationId: string;
   type: 'full' | 'incremental' | 'single';
   productId?: string;
-  environment?: 'staging' | 'production';
+  environment?: 'dev' | 'staging' | 'production';
   cursor?: string;
 }
 

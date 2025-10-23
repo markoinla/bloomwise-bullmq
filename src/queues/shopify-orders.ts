@@ -17,7 +17,7 @@ export interface ShopifyOrdersJobData {
   integrationId: string;
   syncJobId: string;
   fetchAll?: boolean;
-  environment?: 'staging' | 'production';
+  environment?: 'dev' | 'staging' | 'production';
 }
 
 /**

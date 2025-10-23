@@ -11,7 +11,7 @@ interface CustomerSyncOptions {
   organizationId: string;
   syncJobId?: string;
   shopifyCustomerIds?: string[]; // Limit sync to specific shopify_customer IDs (for batch processing)
-  environment?: 'staging' | 'production';
+  environment?: 'dev' | 'staging' | 'production';
 }
 
 export async function syncCustomersToInternal(options: CustomerSyncOptions): Promise<{

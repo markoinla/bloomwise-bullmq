@@ -14,7 +14,7 @@ interface OrderSyncOptions {
   organizationId: string;
   syncJobId?: string;
   shopifyOrderIds?: string[]; // Limit sync to specific shopify_order IDs (for batch processing)
-  environment?: 'staging' | 'production';
+  environment?: 'dev' | 'staging' | 'production';
 }
 
 export async function syncOrdersToInternal(options: OrderSyncOptions): Promise<{

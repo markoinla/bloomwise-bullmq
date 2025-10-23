@@ -24,7 +24,7 @@ interface InternalSyncResult {
 export async function syncShopifyProductsToInternal(
   organizationId: string,
   shopifyProductIds: string[],
-  environment: 'staging' | 'production' = 'production'
+  environment: 'dev' | 'staging' | 'production' = 'production'
 ): Promise<InternalSyncResult> {
   const db = getDatabaseForEnvironment(environment);
   const result: InternalSyncResult = {

@@ -21,7 +21,7 @@ interface OrderWithTags {
 interface ExtractTagsOptions {
   organizationId: string;
   orders: OrderWithTags[];
-  environment?: 'staging' | 'production';
+  environment?: 'dev' | 'staging' | 'production';
 }
 
 export async function extractAndInsertOrderTags(options: ExtractTagsOptions): Promise<{

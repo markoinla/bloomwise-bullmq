@@ -24,7 +24,7 @@ interface ProductsSyncParams {
   fetchAll?: boolean;
   updatedAfter?: string;
   job?: Job;
-  environment?: 'staging' | 'production';
+  environment?: 'dev' | 'staging' | 'production';
 }
 
 interface ProductsSyncResult {

@@ -26,7 +26,7 @@ interface CustomersSyncParams {
   fetchAll?: boolean;
   updatedAfter?: string;
   job?: Job;
-  environment?: 'staging' | 'production';
+  environment?: 'dev' | 'staging' | 'production';
 }
 
 export interface CustomersSyncResult {

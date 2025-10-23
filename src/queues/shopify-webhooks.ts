@@ -24,7 +24,7 @@ export interface OrderWebhookData {
   organizationId: string;
   action: 'create' | 'update' | 'cancel';
   timestamp: string;
-  environment?: 'staging' | 'production';
+  environment?: 'dev' | 'staging' | 'production';
 }
 
 export interface ProductWebhookData {
@@ -32,7 +32,7 @@ export interface ProductWebhookData {
   organizationId: string;
   action: 'create' | 'update' | 'delete';
   timestamp: string;
-  environment?: 'staging' | 'production';
+  environment?: 'dev' | 'staging' | 'production';
 }
 
 export interface CustomerWebhookData {
@@ -40,7 +40,7 @@ export interface CustomerWebhookData {
   organizationId: string;
   action: 'create' | 'update' | 'delete';
   timestamp: string;
-  environment?: 'staging' | 'production';
+  environment?: 'dev' | 'staging' | 'production';
 }
 
 type WebhookData = OrderWebhookData | ProductWebhookData | CustomerWebhookData;

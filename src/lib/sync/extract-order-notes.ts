@@ -21,7 +21,7 @@ interface OrderWithShopifyData {
 interface ExtractNotesOptions {
   organizationId: string;
   orders: OrderWithShopifyData[];
-  environment?: 'staging' | 'production';
+  environment?: 'dev' | 'staging' | 'production';
 }
 
 export async function extractAndInsertOrderNotes(options: ExtractNotesOptions): Promise<{
