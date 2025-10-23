@@ -8,13 +8,16 @@ import { Worker, Job } from 'bullmq';
 import { redisConnection } from '../config/redis';
 import { logger, createJobLogger } from '../lib/utils/logger';
 import { getDatabaseForEnvironment } from '../config/database';
-import { shopifyOrders, orders, shopifyProducts, shopifyVariants, shopifyCustomers, shopifyIntegrations } from '../db/schema';
+import { shopifyOrders, shopifyProducts, shopifyVariants, shopifyCustomers, shopifyIntegrations } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 import { executeGraphQLQuery } from '../lib/shopify/client';
 import { PRODUCT_BY_ID_QUERY, CUSTOMER_BY_ID_QUERY } from '../lib/shopify/graphql-queries';
 import { transformProductToDbRecords } from '../lib/sync/transform-product';
 import { transformCustomerToDbRecord } from '../lib/sync/transform-customer';
 import { sql } from 'drizzle-orm';
+import { syncOrdersToInternal } from '../lib/sync/sync-orders-to-internal';
+import { syncCustomersToInternal } from '../lib/sync/sync-customers-to-internal';
+import { syncShopifyProductsToInternal } from '../lib/sync/sync-to-internal';
 
 export interface OrderWebhookData {
   shopifyOrderId: string;
@@ -45,11 +48,11 @@ type WebhookData = OrderWebhookData | ProductWebhookData | CustomerWebhookData;
 /**
  * Process an order webhook event
  * The raw order data is already saved to shopifyOrders table by the webhook handler
- * This function creates/updates the internal orders table
+ * This function syncs the order to internal tables (orders + order_items + notes + tags)
  */
 async function processOrderWebhook(
   job: Job<OrderWebhookData>
-): Promise<void> {
+): Promise<{ success: boolean; ordersProcessed: number; orderItemsCreated: number; errors: number }> {
   const { shopifyOrderId, organizationId, action, environment = 'production' } = job.data;
   const jobLogger = createJobLogger(job.id!, organizationId);
   const db = getDatabaseForEnvironment(environment);
@@ -60,7 +63,11 @@ async function processOrderWebhook(
   );
 
   try {
-    // 1. Fetch the order from shopifyOrders table
+    // Update job progress: Step 1 - Verifying order exists
+    await job.updateProgress({ step: 1, message: 'Verifying order in database' });
+    await job.log(`Verifying order ${shopifyOrderId} exists in shopify_orders table`);
+
+    // Verify the order exists in shopify_orders table
     const [shopifyOrder] = await db
       .select()
       .from(shopifyOrders)
@@ -73,30 +80,48 @@ async function processOrderWebhook(
       .limit(1);
 
     if (!shopifyOrder) {
+      await job.log(`❌ Order ${shopifyOrderId} not found in database`);
       throw new Error(
-        `Shopify order ${shopifyOrderId} not found in database`
+        `Shopify order ${shopifyOrderId} not found in database. Webhook may have arrived before order was saved.`
       );
     }
 
-    // 2. Handle based on action
-    switch (action) {
-      case 'create':
-        await createInternalOrder(shopifyOrder, organizationId, jobLogger, db);
-        break;
+    await job.log(`✓ Order found: ${shopifyOrder.name || shopifyOrderId}`);
 
-      case 'update':
-        await updateInternalOrder(shopifyOrder, organizationId, jobLogger, db);
-        break;
+    // Update job progress: Step 2 - Syncing to internal tables
+    await job.updateProgress({ step: 2, message: 'Syncing to internal tables' });
+    await job.log(`Syncing order to internal tables (orders, order_items, notes, tags)`);
 
-      case 'cancel':
-        await cancelInternalOrder(shopifyOrder, organizationId, jobLogger, db);
-        break;
-    }
+    // Use the existing sync logic to handle create/update/cancel
+    // This handles:
+    // - Creating/updating orders table
+    // - Creating order_items from line_items
+    // - Extracting and inserting notes
+    // - Extracting and inserting tags
+    // - Linking order items to products
+    const syncResult = await syncOrdersToInternal({
+      organizationId,
+      shopifyOrderIds: [shopifyOrderId], // Only sync this specific order
+      environment,
+    });
+
+    // Update job progress: Step 3 - Complete
+    await job.updateProgress({ step: 3, message: 'Completed successfully' });
+    await job.log(
+      `✓ Sync complete: ${syncResult.ordersProcessed} order(s), ${syncResult.orderItemsCreated} item(s)`
+    );
 
     jobLogger.info(
-      { shopifyOrderId, action },
+      {
+        shopifyOrderId,
+        action,
+        ordersProcessed: syncResult.ordersProcessed,
+        orderItemsCreated: syncResult.orderItemsCreated,
+      },
       `✓ Completed order webhook: ${action}`
     );
+
+    return syncResult;
   } catch (error) {
     jobLogger.error(
       { error, shopifyOrderId, action },
@@ -104,320 +129,6 @@ async function processOrderWebhook(
     );
     throw error;
   }
-}
-
-/**
- * Create an internal order from a Shopify order
- * This is where all the business logic lives: fulfillment type detection, address parsing, etc.
- */
-async function createInternalOrder(
-  shopifyOrder: any,
-  organizationId: string,
-  jobLogger: any,
-  db: any
-): Promise<void> {
-  const rawData = shopifyOrder.rawData as any;
-
-  // Extract customer info
-  const customerEmail = rawData.customer?.email || rawData.email;
-  const customerName = rawData.customer
-    ? `${rawData.customer.first_name || ''} ${rawData.customer.last_name || ''}`.trim()
-    : shopifyOrder.customerName || 'Unknown Customer';
-  const customerPhone = rawData.customer?.phone || rawData.phone;
-
-  // TODO: Find or create customer record when customers table is added to schema
-  const customerId: string | null = null;
-
-  // ============================================
-  // FULFILLMENT TYPE DETECTION
-  // ============================================
-  let fulfillmentType: string = 'not available'; // Default to "not available" instead of shipping
-
-  // Check for pickup location
-  if (shopifyOrder.pickupLocation) {
-    fulfillmentType = 'pickup';
-    jobLogger.info('Detected pickup order from pickupLocation');
-  }
-  // Check shipping lines for delivery or shipping
-  else if (rawData.shipping_lines && rawData.shipping_lines.length > 0) {
-    const shippingTitle = rawData.shipping_lines[0].title?.toLowerCase() || '';
-
-    // Detect local delivery
-    if (
-      shippingTitle.includes('local') ||
-      shippingTitle.includes('delivery')
-    ) {
-      fulfillmentType = 'delivery';
-      jobLogger.info({ shippingTitle }, 'Detected delivery from shipping line');
-    } else {
-      fulfillmentType = 'shipping';
-      jobLogger.info({ shippingTitle }, 'Detected shipping from shipping line');
-    }
-  }
-  // Check tags for delivery indicators
-  else if (rawData.tags) {
-    const tagsArray = Array.isArray(rawData.tags)
-      ? rawData.tags
-      : typeof rawData.tags === 'string'
-      ? rawData.tags.split(',').map((t: string) => t.trim())
-      : [];
-
-    const tagsLower = tagsArray.map((t: string) => t.toLowerCase());
-    if (
-      tagsLower.some((tag: string) => tag.includes('local delivery') || tag === 'delivery')
-    ) {
-      fulfillmentType = 'delivery';
-      jobLogger.info({ tags: tagsArray }, 'Detected delivery from tags');
-    } else if (tagsLower.some((tag: string) => tag.includes('pickup'))) {
-      fulfillmentType = 'pickup';
-      jobLogger.info({ tags: tagsArray }, 'Detected pickup from tags');
-    }
-  }
-
-  jobLogger.info({ fulfillmentType }, 'Final fulfillment type');
-
-  // ============================================
-  // DUE DATE EXTRACTION
-  // ============================================
-  let dueDate: Date;
-
-  // Try to extract date from tags (e.g., "11-11-2025")
-  const dateFromTags = extractDateFromTags(rawData.tags);
-  if (dateFromTags) {
-    dueDate = dateFromTags;
-    jobLogger.info({ dueDate }, 'Due date from tags');
-  }
-  // Use pickup date if available
-  else if (shopifyOrder.pickupDate) {
-    dueDate = new Date(shopifyOrder.pickupDate);
-    jobLogger.info({ dueDate }, 'Due date from pickupDate');
-  }
-  // Default: 3 days from order date
-  else {
-    dueDate = new Date(shopifyOrder.shopifyCreatedAt);
-    dueDate.setDate(dueDate.getDate() + 3);
-    jobLogger.info({ dueDate }, 'Due date defaulted to +3 days');
-  }
-
-  // ============================================
-  // SHIPPING ADDRESS PARSING
-  // ============================================
-  const shippingAddress = rawData.shipping_address;
-  const shippingName = shippingAddress
-    ? `${shippingAddress.first_name || ''} ${shippingAddress.last_name || ''}`.trim()
-    : null;
-
-  const billingAddress = rawData.billing_address;
-  const billingName = billingAddress
-    ? `${billingAddress.first_name || ''} ${billingAddress.last_name || ''}`.trim()
-    : null;
-
-  // ============================================
-  // CREATE INTERNAL ORDER
-  // ============================================
-  const [internalOrder] = await db
-    .insert(orders)
-    .values({
-      organizationId,
-      orderNumber: shopifyOrder.shopifyOrderNumber,
-      customerId,
-      customerName,
-      customerEmail,
-      customerPhone,
-      status: mapShopifyStatus(rawData.financial_status, rawData.fulfillment_status),
-      priority: 'normal',
-      orderDate: new Date(shopifyOrder.shopifyCreatedAt),
-      dueDate: formatDateOnly(dueDate),
-      dueTime: shopifyOrder.pickupTime || null,
-      fulfillmentType, // ← This is the key field!
-
-      // Shipping address fields
-      shippingName,
-      shippingPhone: shippingAddress?.phone || null,
-      shippingEmail: customerEmail,
-      shippingAddress1: shippingAddress?.address1 || null,
-      shippingAddress2: shippingAddress?.address2 || null,
-      shippingCity: shippingAddress?.city || null,
-      shippingState: shippingAddress?.province || null,
-      shippingZip: shippingAddress?.zip || null,
-      shippingCountry: shippingAddress?.country || null,
-      shippingCompany: shippingAddress?.company || null,
-
-      // Billing address
-      billingName,
-      billingAddress1: billingAddress?.address1 || null,
-      billingCity: billingAddress?.city || null,
-      billingState: billingAddress?.province || null,
-      billingZip: billingAddress?.zip || null,
-
-      // Pricing
-      subtotal: shopifyOrder.subtotalPrice?.toString() || '0',
-      taxAmount: shopifyOrder.totalTax?.toString() || '0',
-      discountAmount: shopifyOrder.totalDiscounts?.toString() || '0',
-      total: shopifyOrder.totalPrice.toString(),
-
-      // Payment
-      paymentStatus: mapPaymentStatus(rawData.financial_status),
-
-      // Shopify integration
-      orderSource: 'shopify',
-      externalOrderId: shopifyOrder.shopifyOrderId,
-      shopifyOrderId: shopifyOrder.shopifyOrderId,
-      shopifyOrderNumber: shopifyOrder.shopifyOrderNumber,
-      shopifyFinancialStatus: rawData.financial_status,
-      shopifyFulfillmentStatus: rawData.fulfillment_status,
-      shopifyTags: Array.isArray(rawData.tags)
-        ? rawData.tags.join(', ')
-        : typeof rawData.tags === 'string'
-        ? rawData.tags
-        : null,
-
-      internalNotes: rawData.note || null,
-    })
-    .returning();
-
-  jobLogger.info({ internalOrderId: internalOrder.id }, '✓ Created internal order');
-
-  // Update shopifyOrders with link to internal order
-  await db
-    .update(shopifyOrders)
-    .set({ internalOrderId: internalOrder.id })
-    .where(eq(shopifyOrders.id, shopifyOrder.id));
-
-  // TODO: Create order items from line_items
-  // TODO: Handle custom attributes (gift messages, etc.)
-}
-
-/**
- * Extract date from Shopify tags like "11-11-2025" or "2025-11-11"
- */
-function extractDateFromTags(tags: string[] | string | null): Date | null {
-  if (!tags) return null;
-
-  const tagArray = Array.isArray(tags)
-    ? tags
-    : typeof tags === 'string'
-    ? tags.split(',').map((t) => t.trim())
-    : [];
-
-  for (const tag of tagArray) {
-    // Try MM-DD-YYYY format
-    const match1 = tag.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
-    if (match1) {
-      const [, month, day, year] = match1;
-      return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-    }
-
-    // Try YYYY-MM-DD format
-    const match2 = tag.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-    if (match2) {
-      const [, year, month, day] = match2;
-      return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-    }
-  }
-
-  return null;
-}
-
-/**
- * Format date as YYYY-MM-DD (date type expects string in this format)
- */
-function formatDateOnly(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-/**
- * Map Shopify financial/fulfillment status to internal order status
- */
-function mapShopifyStatus(
-  financialStatus: string,
-  fulfillmentStatus: string | null
-): string {
-  if (fulfillmentStatus === 'fulfilled') return 'completed';
-  if (financialStatus === 'refunded') return 'cancelled';
-  if (financialStatus === 'paid') return 'confirmed';
-  if (financialStatus === 'pending') return 'pending';
-  return 'pending';
-}
-
-/**
- * Map Shopify financial status to internal payment status
- */
-function mapPaymentStatus(financialStatus: string): string {
-  switch (financialStatus) {
-    case 'paid':
-      return 'paid';
-    case 'refunded':
-      return 'refunded';
-    case 'partially_refunded':
-      return 'partial';
-    case 'pending':
-      return 'pending';
-    default:
-      return 'pending';
-  }
-}
-
-/**
- * Update an existing internal order when Shopify order is updated
- */
-async function updateInternalOrder(
-  shopifyOrder: any,
-  organizationId: string,
-  jobLogger: any,
-  db: any
-): Promise<void> {
-  // Find the internal order
-  const [internalOrder] = await db
-    .select()
-    .from(orders)
-    .where(eq(orders.shopifyOrderId, shopifyOrder.shopifyOrderId))
-    .limit(1);
-
-  if (!internalOrder) {
-    // Order doesn't exist yet, create it
-    jobLogger.info('Internal order not found, creating new order');
-    await createInternalOrder(shopifyOrder, organizationId, jobLogger, db);
-    return;
-  }
-
-  // Update existing order
-  const rawData = shopifyOrder.rawData as any;
-
-  await db
-    .update(orders)
-    .set({
-      status: mapShopifyStatus(rawData.financial_status, rawData.fulfillment_status),
-      shopifyFinancialStatus: rawData.financial_status,
-      shopifyFulfillmentStatus: rawData.fulfillment_status,
-      updatedAt: new Date(),
-    })
-    .where(eq(orders.id, internalOrder.id));
-
-  jobLogger.info({ internalOrderId: internalOrder.id }, '✓ Updated internal order');
-}
-
-/**
- * Cancel an internal order when Shopify order is cancelled
- */
-async function cancelInternalOrder(
-  shopifyOrder: any,
-  _organizationId: string,
-  jobLogger: any,
-  db: any
-): Promise<void> {
-  await db
-    .update(orders)
-    .set({
-      status: 'cancelled',
-      updatedAt: new Date(),
-    })
-    .where(eq(orders.shopifyOrderId, shopifyOrder.shopifyOrderId));
-
-  jobLogger.info({ shopifyOrderId: shopifyOrder.shopifyOrderId }, '✓ Cancelled order');
 }
 
 /**
@@ -439,6 +150,8 @@ async function processProductWebhook(
   try {
     if (action === 'delete') {
       // Mark product as inactive/deleted in database
+      await job.updateProgress({ step: 1, message: 'Marking product as deleted' });
+      await job.log(`Marking product ${shopifyProductId} as deleted`);
       jobLogger.info({ shopifyProductId }, 'Product deleted - marking as inactive');
 
       await db
@@ -468,9 +181,13 @@ async function processProductWebhook(
           )
         );
 
+      await job.updateProgress({ step: 2, message: 'Completed' });
+      await job.log(`✓ Product ${shopifyProductId} marked as deleted`);
       jobLogger.info({ shopifyProductId }, '✓ Product marked as deleted');
     } else {
       // Fetch single product from Shopify and upsert
+      await job.updateProgress({ step: 1, message: 'Fetching product from Shopify' });
+      await job.log(`Fetching product ${shopifyProductId} from Shopify API`);
       jobLogger.info({ shopifyProductId }, 'Fetching product from Shopify...');
 
       // Get Shopify integration credentials
@@ -507,10 +224,16 @@ async function processProductWebhook(
 
       const product = response.data.product;
 
+      await job.log(`✓ Product fetched: ${product.title}`);
+
       // Transform to database records
+      await job.updateProgress({ step: 2, message: 'Transforming and upserting product' });
+      await job.log(`Transforming product data for database`);
       const { productRecord, variantRecords } = transformProductToDbRecords(product, organizationId);
 
       // Upsert product
+      await job.updateProgress({ step: 3, message: 'Saving to database' });
+      await job.log(`Upserting product and ${variantRecords.length} variant(s)`);
       await db
         .insert(shopifyProducts)
         .values(productRecord)
@@ -567,8 +290,23 @@ async function processProductWebhook(
           });
       }
 
+      await job.updateProgress({ step: 4, message: 'Syncing to internal products table' });
+      await job.log(`Syncing to internal products and product_variants tables`);
+
+      // Sync to internal products/productVariants tables
+      const syncResult = await syncShopifyProductsToInternal(
+        organizationId,
+        [shopifyProductId],
+        environment
+      );
+
+      await job.updateProgress({ step: 5, message: 'Completed' });
+      await job.log(
+        `✓ Product synced: ${productRecord.title} with ${variantRecords.length} variant(s) (${syncResult.productsCreated} created, ${syncResult.productsUpdated} updated, ${syncResult.variantsCreated} variants created)`
+      );
+
       jobLogger.info(
-        { shopifyProductId, variantCount: variantRecords.length },
+        { shopifyProductId, variantCount: variantRecords.length, syncResult },
         '✓ Product and variants synced'
       );
     }
@@ -597,6 +335,8 @@ async function processCustomerWebhook(
   try {
     if (action === 'delete') {
       // Mark customer as deleted in database
+      await job.updateProgress({ step: 1, message: 'Marking customer as deleted' });
+      await job.log(`Marking customer ${shopifyCustomerId} as deleted`);
       jobLogger.info({ shopifyCustomerId }, 'Customer deleted - marking as inactive');
 
       await db
@@ -612,9 +352,13 @@ async function processCustomerWebhook(
           )
         );
 
+      await job.updateProgress({ step: 2, message: 'Completed' });
+      await job.log(`✓ Customer ${shopifyCustomerId} marked as deleted`);
       jobLogger.info({ shopifyCustomerId }, '✓ Customer marked as deleted');
     } else {
       // Fetch single customer from Shopify and upsert
+      await job.updateProgress({ step: 1, message: 'Fetching customer from Shopify' });
+      await job.log(`Fetching customer ${shopifyCustomerId} from Shopify API`);
       jobLogger.info({ shopifyCustomerId }, 'Fetching customer from Shopify...');
 
       // Get Shopify integration credentials
@@ -651,10 +395,16 @@ async function processCustomerWebhook(
 
       const customer = response.data.customer;
 
+      await job.log(`✓ Customer fetched: ${customer.email || customer.id}`);
+
       // Transform to database record
+      await job.updateProgress({ step: 2, message: 'Transforming and upserting customer' });
+      await job.log(`Transforming customer data for database`);
       const customerRecord = transformCustomerToDbRecord(customer, organizationId, integration.id);
 
       // Upsert customer
+      await job.updateProgress({ step: 3, message: 'Saving to database' });
+      await job.log(`Upserting customer record`);
       await db
         .insert(shopifyCustomers)
         .values(customerRecord)
@@ -685,7 +435,22 @@ async function processCustomerWebhook(
           },
         });
 
-      jobLogger.info({ shopifyCustomerId }, '✓ Customer synced');
+      await job.updateProgress({ step: 4, message: 'Syncing to internal customers table' });
+      await job.log(`Syncing to internal customers table`);
+
+      // Sync to internal customers table
+      const syncResult = await syncCustomersToInternal({
+        organizationId,
+        shopifyCustomerIds: [shopifyCustomerId],
+        environment,
+      });
+
+      await job.updateProgress({ step: 5, message: 'Completed' });
+      await job.log(
+        `✓ Customer synced: ${customerRecord.email || shopifyCustomerId} (${syncResult.customersCreated} created, ${syncResult.customersUpdated} updated)`
+      );
+
+      jobLogger.info({ shopifyCustomerId, syncResult }, '✓ Customer synced');
     }
   } catch (error) {
     jobLogger.error({ error, shopifyCustomerId }, 'Failed to process customer webhook');
