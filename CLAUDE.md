@@ -192,6 +192,27 @@ async function processJob(job: Job<JobDataType>) {
 - Health check on port 3001
 - Uses dumb-init for signal handling
 
+**CI/CD:**
+GitHub Actions workflow ([.github/workflows/deploy.yml](.github/workflows/deploy.yml)) automatically builds and deploys on push to main:
+1. Builds Docker image with buildx and pushes to GitHub Container Registry (GHCR)
+2. Tags: `latest`, `main`, `main-{sha}`
+3. Uses GitHub Actions cache for faster builds
+4. Triggers Dokploy deployment via webhook
+
+**Required GitHub Secrets:**
+- `DOKPLOY_WEBHOOK_URL` - Dokploy deployment webhook URL (e.g., `https://your-domain.com/api/deploy/WEBHOOK_ID`)
+
+**Image Location:**
+- Registry: `ghcr.io`
+- Image: `ghcr.io/{username}/bloomwise-bullmq:latest`
+- Requires Dokploy to be configured to pull from GHCR
+
+**Manual Deployment:**
+```bash
+# Trigger workflow manually from GitHub Actions tab
+# Or push to main/master branch to auto-deploy
+```
+
 **Monitoring:**
 - Bull Board dashboard: `https://jobs.bloomwise.co`
 - Health endpoint: `/health`
