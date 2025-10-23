@@ -182,6 +182,140 @@ app.get('/health', (req, res) => {
 
 ---
 
+## Schedule Management API Endpoints ✅ COMPLETED
+
+The worker service now exposes REST API endpoints for managing repeatable job schedules. These can be called from your main Bloomwise app or any other service.
+
+### Base URL
+- Development: `http://localhost:3001/api/schedules`
+- Production: `https://jobs.bloomwise.co/api/schedules`
+
+### GET /api/schedules/list
+
+List all repeatable job schedules across queues.
+
+**Query Parameters:**
+- `organizationId` (optional) - Filter by organization
+- `queue` (optional) - Filter by specific queue (`shopify-products`, `shopify-orders`, `shopify-customers`)
+
+**Example Request:**
+```bash
+curl "https://jobs.bloomwise.co/api/schedules/list?organizationId=tenant-a"
+```
+
+**Example Response:**
+```json
+{
+  "success": true,
+  "schedules": [
+    {
+      "queue": "shopify-products",
+      "name": "sync-products-tenant-a",
+      "id": "scheduled-products-tenant-a",
+      "key": "scheduled-products-tenant-a",
+      "pattern": "0 */6 * * *",
+      "next": 1698765432000,
+      "organizationId": "tenant-a"
+    }
+  ],
+  "count": 1
+}
+```
+
+### POST /api/schedules/add
+
+Create a new repeatable job schedule.
+
+**Request Body:**
+```json
+{
+  "organizationId": "tenant-a",
+  "integrationId": "integration-123",
+  "queue": "shopify-products",
+  "pattern": "0 */6 * * *",
+  "type": "incremental",
+  "environment": "production"
+}
+```
+
+**Required Fields:**
+- `organizationId` - Tenant identifier
+- `integrationId` - Shopify integration ID
+- `queue` - Queue name (`shopify-products`, `shopify-orders`, `shopify-customers`)
+- `pattern` - Cron pattern (e.g., `"0 */6 * * *"`)
+
+**Optional Fields:**
+- `type` - Sync type (`"incremental"` or `"full"`, default: `"incremental"`)
+- `environment` - Environment (`"production"` or `"staging"`, default: `"production"`)
+
+**Example Request:**
+```bash
+curl -X POST https://jobs.bloomwise.co/api/schedules/add \
+  -H "Content-Type: application/json" \
+  -d '{
+    "organizationId": "tenant-a",
+    "integrationId": "integration-123",
+    "queue": "shopify-products",
+    "pattern": "0 */6 * * *"
+  }'
+```
+
+**Example Response:**
+```json
+{
+  "success": true,
+  "message": "Schedule added successfully",
+  "schedule": {
+    "jobId": "scheduled-products-tenant-a",
+    "jobName": "sync-products-tenant-a",
+    "organizationId": "tenant-a",
+    "integrationId": "integration-123",
+    "queue": "shopify-products",
+    "pattern": "0 */6 * * *",
+    "type": "incremental"
+  }
+}
+```
+
+### POST /api/schedules/remove
+
+Remove an existing repeatable job schedule.
+
+**Request Body:**
+```json
+{
+  "organizationId": "tenant-a",
+  "queue": "shopify-products"
+}
+```
+
+**Example Request:**
+```bash
+curl -X POST https://jobs.bloomwise.co/api/schedules/remove \
+  -H "Content-Type: application/json" \
+  -d '{
+    "organizationId": "tenant-a",
+    "queue": "shopify-products"
+  }'
+```
+
+**Example Response:**
+```json
+{
+  "success": true,
+  "message": "Schedule removed successfully",
+  "removed": {
+    "jobId": "scheduled-products-tenant-a",
+    "organizationId": "tenant-a",
+    "queue": "shopify-products"
+  }
+}
+```
+
+**Status:** ✅ Implemented in [src/api/schedules.ts](../src/api/schedules.ts)
+
+---
+
 ## Main App Integration
 
 ### Overview
@@ -249,11 +383,12 @@ export async function getTenantTier(organizationId: string): Promise<'free' | 's
 
 ### Step 2: Setup Schedules on Integration Creation
 
-When a tenant connects their Shopify store:
+When a tenant connects their Shopify store, use the API endpoints to create schedules:
 
 ```typescript
-import { shopifyProductsQueue, shopifyOrdersQueue, shopifyCustomersQueue } from '@bloomwise/bullmq-worker/config/queues';
 import { getScheduleForTier, getTenantTier } from './lib/sync/schedules';
+
+const WORKER_API_URL = process.env.WORKER_API_URL || 'https://jobs.bloomwise.co/api';
 
 async function onShopifyIntegrationCreated(
   organizationId: string,
@@ -276,56 +411,46 @@ async function onShopifyIntegrationCreated(
   const schedule = getScheduleForTier(tier);
 
   // 3. Schedule recurring products sync
-  await shopifyProductsQueue.add(
-    `sync-products-${organizationId}`, // Unique job name
-    {
-      syncJobId: '', // Will be created when job runs
+  await fetch(`${WORKER_API_URL}/schedules/add`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
       organizationId,
       integrationId,
+      queue: 'shopify-products',
+      pattern: schedule.products,
       type: 'incremental',
       environment: 'production',
-    },
-    {
-      repeat: {
-        pattern: schedule.products,
-      },
-      jobId: `scheduled-products-${organizationId}`, // Prevents duplicates
-    }
-  );
+    }),
+  });
 
   // 4. Schedule recurring orders sync
-  await shopifyOrdersQueue.add(
-    `sync-orders-${organizationId}`,
-    {
-      syncJobId: '',
+  await fetch(`${WORKER_API_URL}/schedules/add`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
       organizationId,
       integrationId,
+      queue: 'shopify-orders',
+      pattern: schedule.orders,
       type: 'incremental',
-    },
-    {
-      repeat: {
-        pattern: schedule.orders,
-      },
-      jobId: `scheduled-orders-${organizationId}`,
-    }
-  );
+      environment: 'production',
+    }),
+  });
 
   // 5. Schedule recurring customers sync
-  await shopifyCustomersQueue.add(
-    `sync-customers-${organizationId}`,
-    {
-      syncJobId: '',
+  await fetch(`${WORKER_API_URL}/schedules/add`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
       organizationId,
       integrationId,
-      fetchAll: false, // Incremental
-    },
-    {
-      repeat: {
-        pattern: schedule.customers,
-      },
-      jobId: `scheduled-customers-${organizationId}`,
-    }
-  );
+      queue: 'shopify-customers',
+      pattern: schedule.customers,
+      type: 'incremental',
+      environment: 'production',
+    }),
+  });
 
   console.log(`Scheduled syncs for ${organizationId} with tier: ${tier}`);
 }
@@ -333,7 +458,7 @@ async function onShopifyIntegrationCreated(
 
 ### Step 3: Update Schedules on Tier Change
 
-When a tenant upgrades/downgrades:
+When a tenant upgrades/downgrades, remove old schedules and create new ones:
 
 ```typescript
 async function onSubscriptionTierChanged(
@@ -345,52 +470,66 @@ async function onSubscriptionTierChanged(
 
   // Remove old schedules
   await Promise.all([
-    shopifyProductsQueue.removeRepeatableByKey(`scheduled-products-${organizationId}`),
-    shopifyOrdersQueue.removeRepeatableByKey(`scheduled-orders-${organizationId}`),
-    shopifyCustomersQueue.removeRepeatableByKey(`scheduled-customers-${organizationId}`),
+    fetch(`${WORKER_API_URL}/schedules/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        organizationId,
+        queue: 'shopify-products',
+      }),
+    }),
+    fetch(`${WORKER_API_URL}/schedules/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        organizationId,
+        queue: 'shopify-orders',
+      }),
+    }),
+    fetch(`${WORKER_API_URL}/schedules/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        organizationId,
+        queue: 'shopify-customers',
+      }),
+    }),
   ]);
 
   // Add new schedules with updated frequency
-  await shopifyProductsQueue.add(
-    `sync-products-${organizationId}`,
-    {
-      syncJobId: '',
+  await fetch(`${WORKER_API_URL}/schedules/add`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
       organizationId,
       integrationId,
+      queue: 'shopify-products',
+      pattern: schedule.products,
       type: 'incremental',
-      environment: 'production',
-    },
-    {
-      repeat: { pattern: schedule.products },
-      jobId: `scheduled-products-${organizationId}`,
-    }
-  );
+    }),
+  });
 
-  await shopifyOrdersQueue.add(
-    `sync-orders-${organizationId}`,
-    {
-      syncJobId: '',
+  await fetch(`${WORKER_API_URL}/schedules/add`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
       organizationId,
       integrationId,
+      queue: 'shopify-orders',
+      pattern: schedule.orders,
       type: 'incremental',
-    },
-    {
-      repeat: { pattern: schedule.orders },
-      jobId: `scheduled-orders-${organizationId}`,
-    }
-  );
+    }),
+  });
 
-  await shopifyCustomersQueue.add(
-    `sync-customers-${organizationId}`,
-    {
-      syncJobId: '',
+  await fetch(`${WORKER_API_URL}/schedules/add`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
       organizationId,
       integrationId,
-      fetchAll: false,
-    },
-    {
-      repeat: { pattern: schedule.customers },
-      jobId: `scheduled-customers-${organizationId}`,
+      queue: 'shopify-customers',
+      pattern: schedule.customers,
+      type: 'incremental',
     }
   );
 
@@ -406,9 +545,21 @@ When a tenant disconnects Shopify:
 async function onShopifyIntegrationDisconnected(organizationId: string) {
   // Remove all scheduled syncs
   await Promise.all([
-    shopifyProductsQueue.removeRepeatableByKey(`scheduled-products-${organizationId}`),
-    shopifyOrdersQueue.removeRepeatableByKey(`scheduled-orders-${organizationId}`),
-    shopifyCustomersQueue.removeRepeatableByKey(`scheduled-customers-${organizationId}`),
+    fetch(`${WORKER_API_URL}/schedules/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ organizationId, queue: 'shopify-products' }),
+    }),
+    fetch(`${WORKER_API_URL}/schedules/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ organizationId, queue: 'shopify-orders' }),
+    }),
+    fetch(`${WORKER_API_URL}/schedules/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ organizationId, queue: 'shopify-customers' }),
+    }),
   ]);
 
   // Update database
@@ -429,9 +580,21 @@ For temporary pauses (payment issues, user request):
 // Pause syncs
 async function pauseTenantSyncs(organizationId: string) {
   await Promise.all([
-    shopifyProductsQueue.removeRepeatableByKey(`scheduled-products-${organizationId}`),
-    shopifyOrdersQueue.removeRepeatableByKey(`scheduled-orders-${organizationId}`),
-    shopifyCustomersQueue.removeRepeatableByKey(`scheduled-customers-${organizationId}`),
+    fetch(`${WORKER_API_URL}/schedules/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ organizationId, queue: 'shopify-products' }),
+    }),
+    fetch(`${WORKER_API_URL}/schedules/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ organizationId, queue: 'shopify-orders' }),
+    }),
+    fetch(`${WORKER_API_URL}/schedules/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ organizationId, queue: 'shopify-customers' }),
+    }),
   ]);
 }
 
@@ -440,10 +603,8 @@ async function resumeTenantSyncs(
   organizationId: string,
   integrationId: string
 ) {
+  // Fetch existing schedules or re-create based on tier
   const tier = await getTenantTier(organizationId);
-  const schedule = getScheduleForTier(tier);
-
-  // Re-add schedules
   await onShopifyIntegrationCreated(organizationId, integrationId, '', '');
 }
 ```

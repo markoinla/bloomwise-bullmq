@@ -5,6 +5,7 @@ import { ExpressAdapter } from '@bull-board/express';
 import { queues } from './config/queues';
 import { logger } from './lib/utils/logger';
 import apiRoutes from './api/routes';
+import schedulesRoutes from './api/schedules';
 import { detectEnvironment } from './middleware/environment';
 
 const PORT = parseInt(process.env.BULL_BOARD_PORT || '3001');
@@ -79,6 +80,7 @@ app.get('/health', (_req, res) => {
 
 // API routes (no auth required for API)
 app.use('/api', apiRoutes);
+app.use('/api/schedules', schedulesRoutes);
 
 // Basic authentication middleware (only for admin routes)
 const basicAuth = (_req: express.Request, res: express.Response, next: express.NextFunction) => {
