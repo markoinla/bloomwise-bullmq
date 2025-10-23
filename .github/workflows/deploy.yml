@@ -61,3 +61,6 @@ jobs:
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         run: |
           curl -X POST https://dev.marko.la/api/deploy/kIdPcjNdjGX1fGG_V72_0
+          curl -X POST  https://dev0.marko.la/api/deploy/7Okm-FdDPJ2kVQk0gbM7q
+
+
