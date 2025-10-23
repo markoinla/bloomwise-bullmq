@@ -246,12 +246,17 @@ router.post('/remove', async (req: Request, res: Response) => {
 
     // Determine resource type from queue name
     const resource = queue.replace('shopify-', '');
-    const jobId = `scheduled-${resource}-${organizationId}`;
+    const expectedJobName = `sync-${resource}-${organizationId}`;
 
-    // Remove repeatable job by key
-    const removed = await queueInstance.removeRepeatableByKey(jobId);
+    // Get all repeatable jobs and find the one matching this organizationId
+    const repeatableJobs = await queueInstance.getRepeatableJobs();
+    const targetJob = repeatableJobs.find((job) => job.name === expectedJobName);
 
-    if (!removed) {
+    if (!targetJob) {
+      logger.warn(
+        { organizationId, queue, expectedJobName, foundJobs: repeatableJobs.length },
+        'API: Schedule not found'
+      );
       return res.status(404).json({
         success: false,
         error: 'Schedule not found',
@@ -259,13 +264,32 @@ router.post('/remove', async (req: Request, res: Response) => {
       });
     }
 
-    logger.info({ jobId, organizationId, queue }, 'API: Schedule removed successfully');
+    // Remove using the actual Redis key
+    const removed = await queueInstance.removeRepeatableByKey(targetJob.key);
+
+    if (!removed) {
+      logger.error(
+        { organizationId, queue, jobKey: targetJob.key },
+        'API: Failed to remove schedule (removeRepeatableByKey returned false)'
+      );
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to remove schedule',
+        message: 'Schedule found but removal failed',
+      });
+    }
+
+    logger.info(
+      { jobName: targetJob.name, jobKey: targetJob.key, organizationId, queue },
+      'API: Schedule removed successfully'
+    );
 
     return res.status(200).json({
       success: true,
       message: 'Schedule removed successfully',
       removed: {
-        jobId,
+        jobName: targetJob.name,
+        jobKey: targetJob.key,
         organizationId,
         queue,
       },

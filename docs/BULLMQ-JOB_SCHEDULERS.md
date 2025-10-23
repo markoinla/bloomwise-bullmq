@@ -305,14 +305,23 @@ curl -X POST https://jobs.bloomwise.co/api/schedules/remove \
   "success": true,
   "message": "Schedule removed successfully",
   "removed": {
-    "jobId": "scheduled-products-tenant-a",
+    "jobName": "sync-products-tenant-a",
+    "jobKey": "repeat:shopify-products:sync-products-tenant-a:...",
     "organizationId": "tenant-a",
     "queue": "shopify-products"
   }
 }
 ```
 
-**Status:** ✅ Implemented in [src/api/schedules.ts](../src/api/schedules.ts)
+**Error Responses:**
+- `400` - Missing required fields or invalid queue name
+- `404` - Schedule not found (no repeatable job exists for this organizationId + queue)
+- `500` - Server error or removal failed
+
+**Implementation Notes:**
+The remove endpoint finds the repeatable job by matching the job name (`sync-{resource}-{organizationId}`) and uses the actual Redis key for removal. This ensures reliable deletion even if the key format changes.
+
+**Status:** ✅ Implemented in [src/api/schedules.ts](../src/api/schedules.ts) (Fixed: Now correctly finds and removes schedules)
 
 ---
 
