@@ -59,7 +59,22 @@ app.use(detectEnvironment);
 
 // Health check endpoint (no auth)
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'bull-board' });
+  res.json({
+    status: 'ok',
+    service: 'bloomwise-bullmq-worker',
+    timestamp: new Date().toISOString(),
+    workers: {
+      products: 'active',
+      orders: 'active',
+      customers: 'active',
+      webhooks: 'active',
+    },
+    schedulers: {
+      products: 'active',
+      orders: 'active',
+      customers: 'active',
+    },
+  });
 });
 
 // API routes (no auth required for API)

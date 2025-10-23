@@ -1,10 +1,12 @@
 import 'dotenv/config';
+import { JobScheduler } from 'bullmq';
 import { logger } from './lib/utils/logger';
 import { startDashboard } from './dashboard';
 import { shopifyProductsWorker } from './queues/shopify-products';
 import { shopifyOrdersWorker } from './queues/shopify-orders';
 import { shopifyWebhooksWorker } from './queues/shopify-webhooks';
 import { shopifyCustomersWorker } from './queues/shopify-customers';
+import { redisConnection } from './config/redis';
 
 async function main() {
   logger.info('Starting Bloomwise BullMQ Worker Service...');
@@ -24,6 +26,25 @@ async function main() {
   // Start Bull Board dashboard (includes health check)
   startDashboard();
 
+  // Initialize job schedulers for repeatable jobs
+  logger.info('Initializing job schedulers...');
+  const schedulers = {
+    products: new JobScheduler('shopify-products', {
+      connection: redisConnection,
+    }),
+    orders: new JobScheduler('shopify-orders', {
+      connection: redisConnection,
+    }),
+    customers: new JobScheduler('shopify-customers', {
+      connection: redisConnection,
+    }),
+  };
+
+  logger.info('Job schedulers initialized:');
+  logger.info('  - shopify-products scheduler (active)');
+  logger.info('  - shopify-orders scheduler (active)');
+  logger.info('  - shopify-customers scheduler (active)');
+
   // Workers are already initialized and listening
   logger.info('Workers initialized:');
   logger.info('  - shopify-products (listening)');
@@ -36,6 +57,16 @@ async function main() {
   const shutdown = async () => {
     logger.info('Shutting down worker service...');
 
+    // Close schedulers first
+    logger.info('Closing job schedulers...');
+    await Promise.all([
+      schedulers.products.close(),
+      schedulers.orders.close(),
+      schedulers.customers.close(),
+    ]);
+    logger.info('Job schedulers closed');
+
+    // Then close workers
     await Promise.all([
       shopifyProductsWorker.close(),
       shopifyOrdersWorker.close(),
