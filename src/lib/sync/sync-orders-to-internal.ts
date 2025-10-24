@@ -562,17 +562,64 @@ function transformShopifyOrderToInternal(shopifyOrder: any) {
 
 function transformOrderItems(shopifyOrder: any, internalOrderId: string) {
   const rawData = shopifyOrder.rawData as any;
-  const lineItems = rawData.lineItems?.edges || [];
+
+  // Handle both GraphQL format (lineItems.edges) and REST format (line_items array)
+  let lineItems: any[] = [];
+
+  if (rawData.lineItems?.edges) {
+    // GraphQL format: { lineItems: { edges: [{ node: {...} }] } }
+    lineItems = rawData.lineItems.edges.map((edge: any) => ({
+      ...edge.node,
+      _isGraphQL: true,
+    }));
+  } else if (rawData.line_items && Array.isArray(rawData.line_items)) {
+    // REST format: { line_items: [{...}] }
+    lineItems = rawData.line_items.map((item: any) => ({
+      ...item,
+      _isGraphQL: false,
+    }));
+  }
 
   if (lineItems.length === 0) {
     return [];
   }
 
   // Transform line items to order items format
-  return lineItems.map((edge: any, index: number) => {
-    const item = edge.node;
-    const variant = item.variant || {};
-    const product = variant.product || {};
+  return lineItems.map((item: any, index: number) => {
+    const isGraphQL = item._isGraphQL;
+
+    // Extract variant and product data based on format
+    let variant: any = {};
+    let product: any = {};
+    let shopifyProductId: string | null = null;
+    let shopifyVariantId: string | null = null;
+    let variantSku: string | null = null;
+    let variantTitle: string | null = null;
+    let unitPrice: string = '0';
+    let subtotal: string = '0';
+    let customAttributes: any = null;
+
+    if (isGraphQL) {
+      // GraphQL format
+      variant = item.variant || {};
+      product = variant.product || {};
+      shopifyProductId = product.legacyResourceId || variant.product?.legacyResourceId;
+      shopifyVariantId = variant.legacyResourceId;
+      variantSku = variant.sku;
+      variantTitle = variant.title;
+      unitPrice = item.originalUnitPriceSet?.shopMoney?.amount || '0';
+      subtotal = item.discountedTotalSet?.shopMoney?.amount || '0';
+      customAttributes = item.customAttributes;
+    } else {
+      // REST format
+      shopifyProductId = item.product_id?.toString();
+      shopifyVariantId = item.variant_id?.toString();
+      variantSku = item.sku;
+      variantTitle = item.variant_title;
+      unitPrice = item.price || '0';
+      subtotal = (parseFloat(item.price || '0') * (item.quantity || 1)).toFixed(2);
+      customAttributes = item.properties || item.custom_attributes;
+    }
 
     return {
       organizationId: shopifyOrder.organizationId,
@@ -583,22 +630,22 @@ function transformOrderItems(shopifyOrder: any, internalOrderId: string) {
       recipeId: null,
       variantId: null,
       inventoryItemId: null,
-      name: item.title || 'Unknown Item',
-      description: item.variantTitle || variant.title,
+      name: item.title || item.name || 'Unknown Item',
+      description: variantTitle,
       quantity: item.quantity || 1,
-      unitPrice: item.originalUnitPriceSet?.shopMoney?.amount || '0',
-      subtotal: item.discountedTotalSet?.shopMoney?.amount || '0',
+      unitPrice,
+      subtotal,
       unitCost: null,
       totalCost: null,
       recipeLaborMinutes: null,
       recipeRetailPrice: null,
       recipeMaterialCost: null,
       externalItemId: item.id,
-      externalSku: variant.sku,
-      shopifyProductId: product.legacyResourceId || variant.product?.legacyResourceId,
-      shopifyVariantId: variant.legacyResourceId,
+      externalSku: variantSku,
+      shopifyProductId,
+      shopifyVariantId,
       recipeVariantId: null,
-      customizations: item.customAttributes ? { customAttributes: item.customAttributes } : null,
+      customizations: customAttributes ? { customAttributes } : null,
       substitutions: null,
       status: 'pending',
       completedAt: null,
