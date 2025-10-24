@@ -68,9 +68,6 @@ export async function syncShopifyProducts(
     );
     await job?.log(`🚀 Starting ${fetchAll ? 'full' : 'incremental'} products sync from ${shopDomain}`);
 
-    // TODO: Implement actual GraphQL product fetching
-    // This is a placeholder that shows the structure
-
     // 1. Build GraphQL query filter
     let graphqlQuery = '';
     if (updatedAfter && !fetchAll) {

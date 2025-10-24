@@ -15,3 +15,7 @@ docs
 test-*.ts
 check-*.ts
 verify-*.ts
+
+# Backup files
+*.bak
+*.bak*

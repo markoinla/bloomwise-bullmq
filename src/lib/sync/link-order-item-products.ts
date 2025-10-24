@@ -210,8 +210,15 @@ export async function linkOrderItemsToProducts(
     // 6. Batch update order items with SQL for performance
     if (itemsToUpdate.length > 0) {
       // Create a VALUES clause for bulk update
+      // Handle NULL values properly - only cast non-NULL values to UUID
       const values = itemsToUpdate.map(item =>
-        sql`(${item.id}::uuid, ${item.productId}::uuid, ${item.productVariantId}::uuid, ${item.itemType}, ${item.recipeId}::uuid)`
+        sql`(
+          ${item.id}::uuid,
+          ${item.productId ? sql`${item.productId}::uuid` : sql`NULL`},
+          ${item.productVariantId ? sql`${item.productVariantId}::uuid` : sql`NULL`},
+          ${item.itemType},
+          ${item.recipeId ? sql`${item.recipeId}::uuid` : sql`NULL`}
+        )`
       );
 
       await db.execute(sql`
