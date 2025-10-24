@@ -9,7 +9,7 @@
 
 import { getDatabaseForEnvironment } from '../../config/database';
 import { notes, orderItems } from '../../db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, and, inArray, or } from 'drizzle-orm';
 import { logger } from '../utils/logger';
 
 interface OrderWithShopifyData {
@@ -43,6 +43,54 @@ export async function extractAndInsertOrderNotes(options: ExtractNotesOptions): 
   }
 
   try {
+    // Step 1: Delete existing notes from Shopify for these orders
+    // This prevents duplicates when orders are re-synced
+    const orderIds = orders.map(o => o.internalOrderId);
+
+    if (orderIds.length > 0) {
+      // Get all order item IDs for these orders to delete their notes too
+      const orderItemsForOrders = await db
+        .select({ id: orderItems.id, orderId: orderItems.orderId })
+        .from(orderItems)
+        .where(inArray(orderItems.orderId, orderIds));
+
+      const orderItemIds = orderItemsForOrders.map(oi => oi.id);
+
+      // Build delete conditions
+      const deleteConditions = [];
+
+      // Delete order-level notes from Shopify
+      deleteConditions.push(
+        and(
+          eq(notes.noteSource, 'shopify'),
+          eq(notes.entityType, 'order'),
+          inArray(notes.entityId, orderIds)
+        )
+      );
+
+      // Delete order item-level notes from Shopify
+      if (orderItemIds.length > 0) {
+        deleteConditions.push(
+          and(
+            eq(notes.noteSource, 'shopify'),
+            eq(notes.entityType, 'orderItem'),
+            inArray(notes.entityId, orderItemIds)
+          )
+        );
+      }
+
+      // Execute delete
+      await db
+        .delete(notes)
+        .where(or(...deleteConditions));
+
+      logger.info(
+        { orderCount: orderIds.length, orderItemCount: orderItemIds.length },
+        'Deleted existing Shopify notes before re-sync'
+      );
+    }
+
+    // Step 2: Extract notes from Shopify orders
     const notesToInsert: any[] = [];
 
     for (const { internalOrderId, shopifyOrder, shopifyCreatedAt } of orders) {
