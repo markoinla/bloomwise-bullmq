@@ -10,3 +10,8 @@ README.md
 .idea
 *.md
 docs
+
+# Test files
+test-*.ts
+check-*.ts
+verify-*.ts

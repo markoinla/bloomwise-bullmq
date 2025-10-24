@@ -8,11 +8,12 @@
  *   npx tsx src/scripts/backfill-order-items.ts [organizationId]
  */
 
-import { getDatabaseForEnvironment } from '../../config/database';
-import { shopifyOrders } from '../../db/schema';
+import 'dotenv/config';
+import { getDatabaseForEnvironment } from '../config/database';
+import { shopifyOrders } from '../db/schema';
 import { eq, isNotNull, and } from 'drizzle-orm';
-import { syncOrdersToInternal } from '../../lib/sync/sync-orders-to-internal';
-import { logger } from '../../lib/utils/logger';
+import { syncOrdersToInternal } from '../lib/sync/sync-orders-to-internal';
+import { logger } from '../lib/utils/logger';
 
 async function backfillOrderItems() {
   const organizationId = process.argv[2];
@@ -50,7 +51,7 @@ async function backfillOrderItems() {
     }
 
     // Get the shopify_order_ids to process
-    const shopifyOrderIds = linkedOrders.map(o => o.shopifyOrderId);
+    const shopifyOrderIds = linkedOrders.map((o: typeof shopifyOrders.$inferSelect) => o.shopifyOrderId);
 
     logger.info(
       { orderCount: linkedOrders.length },
