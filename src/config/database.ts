@@ -30,30 +30,45 @@ export const db = defaultSql ? drizzle(defaultSql) : (productionDb || stagingDb 
  * Get database connection for a specific environment
  */
 export function getDatabaseForEnvironment(environment: 'dev' | 'staging' | 'production' = 'production') {
+  logger.debug({ requestedEnvironment: environment }, 'Getting database for environment');
+
   if (environment === 'dev') {
     if (!devDb) {
-      logger.warn('Dev database not configured, falling back to staging or production');
+      logger.warn({
+        requestedEnvironment: 'dev',
+        fallback: stagingDb ? 'staging' : (productionDb ? 'production' : 'default')
+      }, 'Dev database not configured, using fallback');
       return stagingDb || productionDb || db;
     }
+    logger.debug({ environment: 'dev' }, 'Using dev database');
     return devDb;
   }
 
   if (environment === 'staging') {
     if (!stagingDb) {
-      logger.warn('Staging database not configured, falling back to production');
+      logger.warn({
+        requestedEnvironment: 'staging',
+        fallback: productionDb ? 'production' : 'default'
+      }, 'Staging database not configured, using fallback');
       return productionDb || db;
     }
+    logger.debug({ environment: 'staging' }, 'Using staging database');
     return stagingDb;
   }
 
   if (environment === 'production') {
     if (!productionDb) {
-      logger.warn('Production database not configured, falling back to default');
+      logger.warn({
+        requestedEnvironment: 'production',
+        fallback: 'default'
+      }, 'Production database not configured, using fallback');
       return db;
     }
+    logger.debug({ environment: 'production' }, 'Using production database');
     return productionDb;
   }
 
+  logger.warn({ environment }, 'Unknown environment, using default database');
   return db;
 }
 

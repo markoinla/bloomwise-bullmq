@@ -4,6 +4,7 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
+import { logger } from '../lib/utils/logger';
 
 export type Environment = 'dev' | 'staging' | 'production';
 
@@ -51,14 +52,14 @@ export function detectEnvironment(req: Request, _res: Response, next: NextFuncti
   }
 
   // Log for debugging
-  console.log('[ENV DETECTION]', {
+  logger.debug({
     origin: origin || '(empty)',
     referer: referer || '(empty)',
     host: host || '(empty)',
-    combinedHeaders: headers,
-    detected: req.environment,
+    detectedEnvironment: req.environment,
     path: req.path,
-  });
+    method: req.method,
+  }, 'Environment detected from request headers');
 
   next();
 }

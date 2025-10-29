@@ -12,7 +12,7 @@ async function main() {
   logger.info('Starting Bloomwise BullMQ Worker Service...');
 
   // Validate required environment variables
-  const requiredEnvVars = ['DATABASE_URL', 'REDIS_URL'];
+  const requiredEnvVars = ['REDIS_URL'];
   const missingEnvVars = requiredEnvVars.filter((varName) => !process.env[varName]);
 
   if (missingEnvVars.length > 0) {
@@ -22,6 +22,27 @@ async function main() {
     );
     process.exit(1);
   }
+
+  // Validate at least one database URL is configured
+  const hasDevDb = !!process.env.DEV_DATABASE_URL;
+  const hasStagingDb = !!process.env.STAGING_DATABASE_URL;
+  const hasProductionDb = !!process.env.PRODUCTION_DATABASE_URL;
+  const hasFallbackDb = !!process.env.DATABASE_URL;
+
+  if (!hasDevDb && !hasStagingDb && !hasProductionDb && !hasFallbackDb) {
+    logger.error(
+      'No database connection configured. Set at least one of: DEV_DATABASE_URL, STAGING_DATABASE_URL, PRODUCTION_DATABASE_URL, or DATABASE_URL'
+    );
+    process.exit(1);
+  }
+
+  // Log configured database environments
+  const configuredDbs = [];
+  if (hasDevDb) configuredDbs.push('dev');
+  if (hasStagingDb) configuredDbs.push('staging');
+  if (hasProductionDb) configuredDbs.push('production');
+  if (hasFallbackDb) configuredDbs.push('fallback');
+  logger.info({ configuredDatabases: configuredDbs }, 'Database connections configured');
 
   // Start Bull Board dashboard (includes health check)
   startDashboard();

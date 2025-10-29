@@ -6,7 +6,7 @@ import express, { Request, Response } from 'express';
 import { Queue } from 'bullmq';
 import { createId } from '@paralleldrive/cuid2';
 import { redisConnection } from '../config/redis';
-import { db, getDatabaseForEnvironment } from '../config/database';
+import { getDatabaseForEnvironment } from '../config/database';
 import { syncJobs, shopifyIntegrations } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 import { logger } from '../lib/utils/logger';
@@ -45,16 +45,14 @@ router.post('/sync/products', async (req: Request, res: Response) => {
       });
     }
 
-    // Debug logging
-    console.log('[PRODUCTS SYNC API]', {
+    logger.info({
+      organizationId,
+      fetchAll,
+      environment,
       origin: req.get('origin'),
       referer: req.get('referer'),
       host: req.get('host'),
-      detectedEnv: environment,
-      organizationId,
-    });
-
-    logger.info({ organizationId, fetchAll, environment }, 'API: Enqueue products sync request');
+    }, 'API: Enqueue products sync request');
 
     // Get environment-specific database connection
     const envDb = getDatabaseForEnvironment(environment);
@@ -258,8 +256,10 @@ router.post('/sync/orders', async (req: Request, res: Response) => {
 router.get('/sync/status/:syncJobId', async (req: Request, res: Response) => {
   try {
     const { syncJobId } = req.params;
+    const environment = req.environment || 'production';
+    const envDb = getDatabaseForEnvironment(environment);
 
-    const [job] = await db
+    const [job] = await envDb
       .select()
       .from(syncJobs)
       .where(eq(syncJobs.id, syncJobId))

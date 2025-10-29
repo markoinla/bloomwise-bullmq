@@ -115,18 +115,33 @@ Worker picks job → Fetch credentials → Mark running → Shopify GraphQL API
 
 ## Environment Variables
 
-Required:
-- `DATABASE_URL` - Neon PostgreSQL connection string
+Required (at least one database URL must be set):
 - `REDIS_URL` - Redis connection string (format: `redis://default:password@host:6379`)
 
+Database URLs (environment-specific, recommended):
+- `DEV_DATABASE_URL` - Development Neon PostgreSQL connection string
+- `STAGING_DATABASE_URL` - Staging Neon PostgreSQL connection string
+- `PRODUCTION_DATABASE_URL` - Production Neon PostgreSQL connection string
+- `DATABASE_URL` - Fallback PostgreSQL connection string (for backward compatibility)
+
+**Environment Detection:**
+- API routes detect environment from request headers (origin/referer/host):
+  - `dev-local.bloomwise.co` → uses `DEV_DATABASE_URL`
+  - `staging.bloomwise.co` → uses `STAGING_DATABASE_URL`
+  - `app.bloomwise.co` → uses `PRODUCTION_DATABASE_URL`
+- Workers read environment from job data (passed when job is enqueued)
+- CLI scripts use `ENVIRONMENT` env var (`dev`, `staging`, or `production`)
+- Falls back gracefully if specific environment DB not configured
+
 Optional:
-- `NODE_ENV` - Environment (development/production)
+- `NODE_ENV` - Environment (development/production) - affects logging format only
 - `LOG_LEVEL` - Logging level (debug/info/warn/error)
 - `WORKER_CONCURRENCY` - Number of concurrent jobs per worker (default: 5)
 - `WORKER_MAX_RETRIES` - Max retry attempts per job (default: 3)
 - `BULL_BOARD_PORT` - Dashboard port (default: 3001)
 - `BULL_BOARD_USERNAME` - Dashboard username (default: admin)
 - `BULL_BOARD_PASSWORD` - Dashboard password (default: admin)
+- `ENVIRONMENT` - Force environment for CLI scripts (`dev`, `staging`, `production`)
 
 ## Database Patterns
 
