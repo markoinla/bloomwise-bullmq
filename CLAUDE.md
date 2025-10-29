@@ -125,13 +125,32 @@ Database URLs (environment-specific, recommended):
 - `DATABASE_URL` - Fallback PostgreSQL connection string (for backward compatibility)
 
 **Environment Detection:**
-- API routes detect environment from request headers (origin/referer/host):
-  - `dev-local.bloomwise.co` → uses `DEV_DATABASE_URL`
-  - `staging.bloomwise.co` → uses `STAGING_DATABASE_URL`
-  - `app.bloomwise.co` → uses `PRODUCTION_DATABASE_URL`
+
+API routes detect environment with the following priority:
+1. **X-Environment header** (recommended) - Frontend should send `X-Environment: staging` header
+2. **Origin/Referer/Host header** - Automatically detects from request origin:
+   - `dev-local.bloomwise.co` → uses `DEV_DATABASE_URL`
+   - `staging.bloomwise.co` → uses `STAGING_DATABASE_URL`
+   - `app.bloomwise.co` → uses `PRODUCTION_DATABASE_URL`
+3. **Default to production** - If no environment detected
+
+Other environment detection methods:
 - Workers read environment from job data (passed when job is enqueued)
 - CLI scripts use `ENVIRONMENT` env var (`dev`, `staging`, or `production`)
 - Falls back gracefully if specific environment DB not configured
+
+**Frontend Integration:**
+When calling the BullMQ API from your frontend, include the `X-Environment` header:
+```typescript
+fetch('https://jobs.bloomwise.co/api/sync/products', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-Environment': 'staging', // or 'dev' / 'production'
+  },
+  body: JSON.stringify({ organizationId: '...' })
+})
+```
 
 Optional:
 - `NODE_ENV` - Environment (development/production) - affects logging format only

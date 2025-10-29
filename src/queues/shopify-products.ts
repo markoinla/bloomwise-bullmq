@@ -1,4 +1,5 @@
 import { Worker, Job } from 'bullmq';
+import { createId } from '@paralleldrive/cuid2';
 import { redisConnection } from '../config/redis';
 import { ShopifyProductsSyncJob } from '../config/queues';
 import { logger, createJobLogger } from '../lib/utils/logger';
@@ -9,22 +10,52 @@ import { eq } from 'drizzle-orm';
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '5');
 
 async function processShopifyProductsSync(job: Job<ShopifyProductsSyncJob>) {
-  const { syncJobId, organizationId, integrationId, type, environment = 'production' } = job.data;
+  let { syncJobId, organizationId, integrationId, type, environment = 'production' } = job.data;
   const jobLogger = createJobLogger(job.id!, organizationId);
   const db = getDatabaseForEnvironment(environment);
 
   jobLogger.info({ syncJobId, integrationId, type, environment }, 'Starting Shopify products sync');
 
   try {
-    // 1. Verify sync job exists
-    const [syncJob] = await db
-      .select()
-      .from(syncJobs)
-      .where(eq(syncJobs.id, syncJobId))
-      .limit(1);
+    // 1. Verify sync job exists, create if needed (for scheduled jobs)
+    let syncJob = null;
 
+    if (syncJobId) {
+      const [existingSyncJob] = await db
+        .select()
+        .from(syncJobs)
+        .where(eq(syncJobs.id, syncJobId))
+        .limit(1);
+      syncJob = existingSyncJob;
+    }
+
+    // If no syncJob found (scheduled job with empty syncJobId), create one
     if (!syncJob) {
-      throw new Error(`Sync job ${syncJobId} not found in database`);
+      syncJobId = createId();
+      const now = new Date();
+
+      await db.insert(syncJobs).values({
+        id: syncJobId,
+        organizationId,
+        type: type === 'full' ? 'shopify_products' : 'shopify_products_incremental',
+        status: 'pending',
+        config: {
+          fetchAll: type === 'full',
+          source: 'scheduled',
+        },
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      jobLogger.info({ syncJobId, source: 'scheduled' }, 'Created sync job for scheduled task');
+
+      // Fetch the newly created sync job
+      const [newSyncJob] = await db
+        .select()
+        .from(syncJobs)
+        .where(eq(syncJobs.id, syncJobId))
+        .limit(1);
+      syncJob = newSyncJob;
     }
 
     // 2. Fetch Shopify credentials

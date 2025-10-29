@@ -19,7 +19,12 @@ declare global {
 
 /**
  * Middleware to detect environment from request headers
- * Checks Origin, Referer, and Host headers to determine environment
+ * Checks custom X-Environment header first, then Origin/Referer/Host headers
+ *
+ * Priority:
+ * 1. X-Environment header (if valid)
+ * 2. Origin/Referer/Host header detection
+ * 3. Default to production
  *
  * Routing:
  * - dev-local.bloomwise.co → 'dev' (DEV_DATABASE_URL)
@@ -27,6 +32,20 @@ declare global {
  * - app.bloomwise.co → 'production' (PRODUCTION_DATABASE_URL)
  */
 export function detectEnvironment(req: Request, _res: Response, next: NextFunction) {
+  // Check for explicit X-Environment header first
+  const explicitEnv = req.get('x-environment')?.toLowerCase();
+  if (explicitEnv === 'dev' || explicitEnv === 'staging' || explicitEnv === 'production') {
+    req.environment = explicitEnv as Environment;
+    logger.debug({
+      detectedEnvironment: req.environment,
+      source: 'X-Environment header',
+      path: req.path,
+      method: req.method,
+    }, 'Environment detected from custom header');
+    next();
+    return;
+  }
+
   const origin = req.get('origin') || '';
   const referer = req.get('referer') || '';
   const host = req.get('host') || '';
@@ -57,6 +76,7 @@ export function detectEnvironment(req: Request, _res: Response, next: NextFuncti
     referer: referer || '(empty)',
     host: host || '(empty)',
     detectedEnvironment: req.environment,
+    source: 'header detection',
     path: req.path,
     method: req.method,
   }, 'Environment detected from request headers');
